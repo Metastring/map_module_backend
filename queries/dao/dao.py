@@ -13,7 +13,7 @@ def get_polygon_data_from_datasets(dataset: List[str], polygon: Polygon, limit: 
                 SELECT DISTINCT t.*,
                        ST_X((dp).geom) AS longitude,
                        ST_Y((dp).geom) AS latitude
-                FROM cml1.{table} t,
+                FROM public.{table} t,
                      LATERAL ST_DumpPoints(t.geom) AS dp
                 WHERE ST_Intersects(
                     (dp).geom,
