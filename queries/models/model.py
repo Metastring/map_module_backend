@@ -24,6 +24,7 @@ class SpatialQueryInput:
     polygon_detail: List[PolygonDetailInput]
     limit: Optional[int] = 1000
     offset: Optional[int] = 0
+    category: Optional[str] = None  # New field for frontend input
 
 @strawberry.type
 class SpatialQueryType:
