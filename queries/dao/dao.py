@@ -53,14 +53,28 @@ def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: lis
     results = []
     with engine.connect() as conn:
         for table in dataset:
-            query = text(f'''
-                SELECT DISTINCT t."scientificName" AS scientificName,
-                       ST_X((dp).geom) AS longitude,
-                       ST_Y((dp).geom) AS latitude
-                FROM public.{table} t,
-                     LATERAL ST_DumpPoints(t.geom) AS dp
-                WHERE LOWER(t."scientificName") LIKE :name
-            ''')
-            res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})
-            results.extend([dict(row._mapping) for row in res])
+            # Try quoted camelCase first, fallback to lowercase if error
+            try:
+                query = text(f'''
+                    SELECT DISTINCT t."scientificName" AS scientificName,
+                           ST_X((dp).geom) AS longitude,
+                           ST_Y((dp).geom) AS latitude
+                    FROM public.{table} t,
+                         LATERAL ST_DumpPoints(t.geom) AS dp
+                    WHERE LOWER(t."scientificName") LIKE :name
+                ''')
+                res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})
+                results.extend([dict(row._mapping) for row in res])
+            except Exception:
+                # Fallback to lowercase column
+                query = text(f'''
+                    SELECT DISTINCT t.scientificname AS scientificName,
+                           ST_X((dp).geom) AS longitude,
+                           ST_Y((dp).geom) AS latitude
+                    FROM public.{table} t,
+                         LATERAL ST_DumpPoints(t.geom) AS dp
+                    WHERE LOWER(t.scientificname) LIKE :name
+                ''')
+                res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})
+                results.extend([dict(row._mapping) for row in res])
     return results
