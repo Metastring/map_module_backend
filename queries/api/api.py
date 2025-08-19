@@ -1,8 +1,8 @@
 import strawberry
 from fastapi import APIRouter, HTTPException
 from strawberry.fastapi import GraphQLRouter
-from queries.service.service import fetch_polygon_query, fetch_multi_polygon_query
-from queries.models.model import SpatialQueryInput, SpatialQueryType
+from queries.service.service import fetch_polygon_query, fetch_multi_polygon_query, fetch_scientific_name_matches
+from queries.models.model import SpatialQueryInput, SpatialQueryType, ScientificNameInput, ScientificNameQueryType, ScientificNameResult
 
 class SpatialQueryAPI1:
     version = "/v1"
@@ -42,6 +42,26 @@ class Query:
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+    @strawberry.field
+    def getScientificNameMatches(self, input: ScientificNameInput) -> ScientificNameQueryType:
+        try:
+            result = fetch_scientific_name_matches(
+                scientific_name=input.scientificName
+            )
+            # Normalize keys for Strawberry type
+            data = []
+            for row in result["data"]:
+                # Map both possible keys to the correct field
+                sn = row.get("scientificName") or row.get("scientificname")
+                data.append(ScientificNameResult(
+                    scientificName=sn,
+                    longitude=row["longitude"],
+                    latitude=row["latitude"]
+                ))
+            return ScientificNameQueryType(data=data)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
 
 # Create GraphQL schema and router
 schema = strawberry.Schema(query=Query)

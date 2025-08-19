@@ -47,3 +47,20 @@ def get_multi_polygon_data_from_datasets(dataset: List[str], polygon: Union[Poly
             res = conn.execute(query, {"wkt": wkt, "limit": limit, "offset": offset})
             results.extend([dict(row._mapping) for row in res])
     return results
+
+# Accepts a scientific name and returns matching names with longitude and latitude from both datasets
+def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: list = ["gbif", "kew_with_geom"]) -> List[Dict]:
+    results = []
+    with engine.connect() as conn:
+        for table in dataset:
+            query = text(f'''
+                SELECT DISTINCT t."scientificName" AS scientificName,
+                       ST_X((dp).geom) AS longitude,
+                       ST_Y((dp).geom) AS latitude
+                FROM public.{table} t,
+                     LATERAL ST_DumpPoints(t.geom) AS dp
+                WHERE LOWER(t."scientificName") LIKE :name
+            ''')
+            res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})
+            results.extend([dict(row._mapping) for row in res])
+    return results

@@ -1,6 +1,6 @@
 from typing import List
 from shapely.geometry import Polygon, MultiPolygon
-from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets
+from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_scientific_name_matches_from_datasets
 from utils.config import DATASET_MAPPING
 
 
@@ -61,6 +61,11 @@ def fetch_multi_polygon_query(dataset: List[str], polygon_detail: List[dict], li
         geometry = MultiPolygon(polygons)
 
     results = get_multi_polygon_data_from_datasets(mapped_datasets, geometry, limit, offset)
+    return {"data": results}
+
+
+def fetch_scientific_name_matches(scientific_name: str):
+    results = get_scientific_name_matches_from_datasets(scientific_name)
     return {"data": results}
 
 

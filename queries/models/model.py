@@ -29,3 +29,17 @@ class SpatialQueryInput:
 @strawberry.type
 class SpatialQueryType:
     data: List[JSON] 
+
+@strawberry.input
+class ScientificNameInput:
+    scientificName: str
+
+@strawberry.type
+class ScientificNameResult:
+    scientificName: str
+    longitude: float
+    latitude: float
+
+@strawberry.type
+class ScientificNameQueryType:
+    data: List[ScientificNameResult] 
