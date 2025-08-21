@@ -2,7 +2,7 @@ import strawberry
 from fastapi import APIRouter, HTTPException
 from strawberry.fastapi import GraphQLRouter
 from queries.service.service import fetch_polygon_query, fetch_multi_polygon_query, fetch_scientific_name_matches
-from queries.models.model import SpatialQueryInput, SpatialQueryType, ScientificNameInput, ScientificNameQueryType, ScientificNameResult
+from queries.models.model import SpatialQueryInput, SpatialQueryType, ScientificNameInput
 
 class SpatialQueryAPI1:
     version = "/v1"
@@ -20,9 +20,9 @@ class Query:
                 limit=input.limit,
                 offset=input.offset
             )
-            return SpatialQueryType(**result)
+            return SpatialQueryType(results=result.get("results", {}))
         except Exception as e:
-            raise HTTPException(status_code=500, gdetail=str(e))
+            raise HTTPException(status_code=500, detail=str(e))
 
     @strawberry.field
     def getMultiPolygonData(self, input: SpatialQueryInput) -> SpatialQueryType:
@@ -37,29 +37,19 @@ class Query:
                 limit=input.limit,
                 offset=input.offset
             )
-            return SpatialQueryType(**result)
+            return SpatialQueryType(results=result.get("results", {}))
         except HTTPException:
             raise
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
     @strawberry.field
-    def getScientificNameMatches(self, input: ScientificNameInput) -> ScientificNameQueryType:
+    def getScientificNameMatches(self, input: ScientificNameInput) -> SpatialQueryType:
         try:
             result = fetch_scientific_name_matches(
                 scientific_name=input.scientificName
             )
-            # Normalize keys for Strawberry type
-            data = []
-            for row in result["data"]:
-                # Map both possible keys to the correct field
-                sn = row.get("scientificName") or row.get("scientificname")
-                data.append(ScientificNameResult(
-                    scientificName=sn,
-                    longitude=row["longitude"],
-                    latitude=row["latitude"]
-                ))
-            return ScientificNameQueryType(data=data)
+            return SpatialQueryType(results=result.get("results", {}))
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
