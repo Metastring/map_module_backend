@@ -14,16 +14,15 @@ import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from utils.config import *
+from typing import List
 
 # Initialize router
 router = APIRouter()
 
 # Initialize DAO and Service with configuration
 # You can override these values in your config.py file
-geoserver_host = getattr(sys.modules[__name__], 'geoserver_host', 'localhost')
-geoserver_port = getattr(sys.modules[__name__], 'geoserver_port', '8080')
-geoserver_username = getattr(sys.modules[__name__], 'geoserver_username', 'admin')
-geoserver_password = getattr(sys.modules[__name__], 'geoserver_password', 'geoserver')
+# Use values directly from config.py
+# geoserver_host, geoserver_port, geoserver_username, geoserver_password are imported from config
 
 geo_dao = GeoServerDAO(
     base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest", 
@@ -322,6 +321,17 @@ async def get_layer_tile_url(layer: str):
     try:
         tile_url = geo_service.get_tile_layer_url(layer)
         return {"tile_url": tile_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/layers/tile_urls")
+async def get_tile_urls_for_datasets(datasets: List[str]):
+    """
+    Given dataset names (e.g., ["gbif", "kew_with_geom"]) return a map of dataset -> WMS tile URL.
+    This lets the frontend render point and distribution layers immediately.
+    """
+    try:
+        return geo_service.get_tile_urls_for_datasets(datasets)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

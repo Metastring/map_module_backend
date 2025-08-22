@@ -1,5 +1,7 @@
 from geoserver.dao import GeoServerDAO
 from geoserver.model import UploadRequest, UpdateRequest, PostGISRequest, CreateLayerRequest
+from typing import List, Dict
+from utils.config import DATASET_MAPPING
 
 class GeoServerService:
     def __init__(self, dao: GeoServerDAO):
@@ -213,4 +215,38 @@ class GeoServerService:
         if not table_name:
             raise ValueError("Table name is required.")
         return self.dao.get_table_details(workspace, datastore, table_name)
+
+    def get_tile_urls_for_datasets(self, datasets: List[str]) -> Dict[str, str]:
+        """
+        Resolve dataset names to existing GeoServer layer names and return tile URLs.
+        Strategy: fetch all layers, then for each dataset find a layer whose
+        name is exactly the dataset or ends with ":{dataset}". Return URL map.
+        """
+        response = self.dao.list_layers()
+        if response.status_code != 200:
+            raise ValueError(f"Failed to list layers: {response.text}")
+        data = response.json() or {}
+        layers = (data.get("layers") or {}).get("layer") or []
+        # Normalize to list of strings (names)
+        layer_names: List[str] = []
+        for item in layers:
+            if isinstance(item, dict) and "name" in item:
+                layer_names.append(item["name"])  # e.g., "ws:gbif"
+            elif isinstance(item, str):
+                layer_names.append(item)
+
+        results: Dict[str, str] = {}
+        for ds in datasets:
+            # Map frontend dataset name to actual layer/table name if provided
+            target = DATASET_MAPPING.get(ds, ds)
+            match = None
+            for lname in layer_names:
+                if lname == target or lname.endswith(f":{target}"):
+                    match = lname
+                    break
+            if match:
+                results[ds] = self.get_tile_layer_url(match)
+            else:
+                results[ds] = ""  # Not found; caller can handle
+        return results
 

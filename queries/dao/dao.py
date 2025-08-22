@@ -11,18 +11,31 @@ def get_polygon_data_from_datasets(dataset: List[str], polygon: Polygon, limit: 
 	results_by_dataset: Dict[str, List[Dict]] = {}
 	with engine.connect() as conn:
 		for table in dataset:
-			query = text(f"""
-				SELECT DISTINCT t.*,
-				       ST_X((dp).geom) AS longitude,
-				       ST_Y((dp).geom) AS latitude
-				FROM public.{table} t,
-				     LATERAL ST_DumpPoints(t.geom) AS dp
-				WHERE ST_Intersects(
-					(dp).geom,
-					ST_SetSRID(ST_GeomFromText(:wkt), 4326)
-				)
-				LIMIT :limit OFFSET :offset
-			""")
+			# Treat 'gbif' as point dataset; others (e.g., 'kew_with_geom') as polygon/distribution datasets
+			if table == "gbif":
+				query = text(f"""
+					SELECT t.*, 
+					       ST_X(t.geom) AS longitude,
+					       ST_Y(t.geom) AS latitude
+					FROM public.{table} t
+					WHERE ST_Intersects(
+						t.geom,
+						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
+					)
+					LIMIT :limit OFFSET :offset
+				""")
+			else:
+				# Distribution polygons: return full features without centroid reduction
+				query = text(f"""
+					SELECT t.*, 
+					       ST_AsGeoJSON(t.geom) AS geom_geojson
+					FROM public.{table} t
+					WHERE ST_Intersects(
+						t.geom,
+						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
+					)
+					LIMIT :limit OFFSET :offset
+				""")
 			res = conn.execute(query, {"wkt": wkt, "limit": limit, "offset": offset})
 			results_by_dataset[table] = [dict(row._mapping) for row in res]
 	return results_by_dataset
@@ -34,18 +47,29 @@ def get_multi_polygon_data_from_datasets(dataset: List[str], polygon: Union[Poly
 	results_by_dataset: Dict[str, List[Dict]] = {}
 	with engine.connect() as conn:
 		for table in dataset:
-			query = text(f"""
-				SELECT DISTINCT t.*,
-				       ST_X((dp).geom) AS longitude,
-				       ST_Y((dp).geom) AS latitude
-				FROM public.{table} t,
-				     LATERAL ST_DumpPoints(t.geom) AS dp
-				WHERE ST_Intersects(
-					(dp).geom,
-					ST_SetSRID(ST_GeomFromText(:wkt), 4326)
-				)
-				LIMIT :limit OFFSET :offset
-			""")
+			if table == "gbif":
+				query = text(f"""
+					SELECT t.*, 
+					       ST_X(t.geom) AS longitude,
+					       ST_Y(t.geom) AS latitude
+					FROM public.{table} t
+					WHERE ST_Intersects(
+						t.geom,
+						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
+					)
+					LIMIT :limit OFFSET :offset
+				""")
+			else:
+				query = text(f"""
+					SELECT t.*, 
+					       ST_AsGeoJSON(t.geom) AS geom_geojson
+					FROM public.{table} t
+					WHERE ST_Intersects(
+						t.geom,
+						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
+					)
+					LIMIT :limit OFFSET :offset
+				""")
 			res = conn.execute(query, {"wkt": wkt, "limit": limit, "offset": offset})
 			results_by_dataset[table] = [dict(row._mapping) for row in res]
 	return results_by_dataset
@@ -56,14 +80,21 @@ def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: lis
 	results_by_dataset: Dict[str, List[Dict]] = {}
 	with engine.connect() as conn:
 		for table in dataset:
-			query = text(f'''
-				SELECT DISTINCT t.*,
-				       ST_X((dp).geom) AS longitude,
-				       ST_Y((dp).geom) AS latitude
-				FROM public.{table} t,
-				     LATERAL ST_DumpPoints(t.geom) AS dp
-				WHERE LOWER(t."scientificName") LIKE :name
-			''')
+			if table == "gbif":
+				query = text(f''' 
+					SELECT t.*,
+					       ST_X(t.geom) AS longitude,
+					       ST_Y(t.geom) AS latitude
+					FROM public.{table} t
+					WHERE LOWER(t."scientificName") LIKE :name
+				''')
+			else:
+				query = text(f''' 
+					SELECT t.*,
+					       ST_AsGeoJSON(t.geom) AS geom_geojson
+					FROM public.{table} t
+					WHERE LOWER(t."scientificName") LIKE :name
+				''')
 			res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})
 			results_by_dataset[table] = [dict(row._mapping) for row in res]
 	return results_by_dataset
