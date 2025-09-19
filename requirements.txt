@@ -15,3 +15,4 @@ aiofiles
 # Test dependencies
 pytest
 pytest-mock
+python-dotenv
