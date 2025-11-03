@@ -436,3 +436,40 @@ async def get_table_details(workspace: str, datastore: str, table: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+#################################### New simplified Layer APIs To Get column and data #################################
+
+@router.get("/layer/columns")
+async def get_layer_columns(layer: str):
+    """
+    Return a simplified schema (columns) for the given layer (e.g., ws:layer).
+    """
+    try:
+        result = geo_service.get_layer_columns(layer)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/layer/data")
+async def get_layer_data(layer: str, maxFeatures: int = 100, bbox: str = None, filter: str = None, properties: str = None):
+    """
+    Return feature data for a layer via WFS with optional bbox/filter and maxFeatures.
+    """
+    try:
+        response = geo_service.get_layer_data(
+            layer,
+            max_features=maxFeatures,
+            bbox=bbox,
+            filter_query=filter,
+            properties=properties,
+        )
+        if response.status_code == 200:
+            return response.json()
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+

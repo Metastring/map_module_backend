@@ -250,3 +250,49 @@ class GeoServerService:
                 results[ds] = ""  # Not found; caller can handle
         return results
 
+    def get_layer_columns(self, layer: str):
+        """
+        Resolve a layer to its underlying feature type and return a simplified
+        list of attribute definitions (columns).
+        """
+        layer_details = self.dao.get_layer_details(layer)
+        if layer_details.status_code != 200:
+            raise ValueError(f"Failed to get layer details: {layer_details.text}")
+        layer_json = layer_details.json() or {}
+        resource = (layer_json.get("layer") or {}).get("resource") or {}
+        href = resource.get("href")
+        if not href:
+            raise ValueError("Layer resource href not found")
+        if not href.endswith(".json"):
+            href = href + ".json"
+
+        ft_response = self.dao.get_url(href)
+        if ft_response.status_code != 200:
+            raise ValueError(f"Failed to get feature type details: {ft_response.text}")
+        ft_json = ft_response.json() or {}
+        attributes = ((ft_json.get("featureType") or {}).get("attributes") or {}).get("attribute") or []
+
+        columns = []
+        for attr in attributes:
+            if isinstance(attr, dict):
+                columns.append({
+                    "name": attr.get("name"),
+                    "type": attr.get("binding"),
+                    "nillable": attr.get("nillable"),
+                    "minOccurs": attr.get("minOccurs"),
+                    "maxOccurs": attr.get("maxOccurs")
+                })
+        return {"columns": columns}
+
+    def get_layer_data(self, layer: str, max_features: int = 100, bbox: str = None, filter_query: str = None, properties: str = None):
+        """
+        Fetch data for a layer via WFS with optional bbox/filter and max features.
+        """
+        return self.dao.query_features(
+            layer,
+            bbox=bbox,
+            filter_query=filter_query,
+            max_features=max_features,
+            property_names=properties,
+        )
+

@@ -181,7 +181,7 @@ class GeoServerDAO:
         }
         return wms_url + "?" + urlencode(params)
 
-    def query_features(self, layer: str, bbox: str = None, filter_query: str = None):
+    def query_features(self, layer: str, bbox: str = None, filter_query: str = None, max_features: int = None, property_names: str = None):
         """
         Query features from a GeoServer WFS service.
         """
@@ -197,6 +197,11 @@ class GeoServerDAO:
             params["bbox"] = bbox
         if filter_query:
             params["CQL_FILTER"] = filter_query
+        if max_features is not None:
+            params["maxFeatures"] = str(max_features)
+        if property_names:
+            # Comma-separated list of attribute names
+            params["propertyName"] = property_names
 
         return requests.get(wfs_url, params=params, auth=self.auth)
 
@@ -440,5 +445,11 @@ class GeoServerDAO:
         Get details of a specific table in a datastore.
         """
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{table_name}.json"
+        return requests.get(url, auth=self.auth)
+
+    def get_url(self, url: str):
+        """
+        Perform an authenticated GET to an absolute GeoServer REST URL.
+        """
         return requests.get(url, auth=self.auth)
 

@@ -110,5 +110,3 @@ class SchemaTablesResponse(BaseModel):
     db_schema: str = Field(..., description="Schema name")
     workspace: str = Field(..., description="Workspace name")
     datastore: str = Field(..., description="Datastore name")
-
-
