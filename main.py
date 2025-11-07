@@ -17,7 +17,7 @@ app.add_middleware(
 )
 
 # Include routers
-app.include_router(geoserver_router)  # Add the GeoServer API router
+app.include_router(geoserver_router, tags=["geoserver"])  # Add the GeoServer API router
 app.include_router(SpatialQueryAPI1.router, prefix=SpatialQueryAPI1.version, tags=["spatial-graphql-copy"])  # Add copy spatial queries GraphQL endpoint
 
 # Add health check endpoint for GraphQL service

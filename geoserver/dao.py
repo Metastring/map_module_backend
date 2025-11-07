@@ -1,7 +1,8 @@
 from urllib.parse import urlencode
 import requests
 import os
-import json
+import tempfile
+import zipfile
 
 
 class GeoServerDAO:
@@ -18,13 +19,60 @@ class GeoServerDAO:
             
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{store_name}/file.shp"
         headers = {"Content-type": "application/zip"}
-        
-        # Check if file is a zip file
-        if not file_path.lower().endswith('.zip'):
-            raise ValueError("Shapefile must be uploaded as a ZIP file containing all shapefile components (.shp, .shx, .dbf, .prj)")
-            
-        with open(file_path, "rb") as f:
-            response = requests.put(url, auth=self.auth, data=f, headers=headers)
+
+        # Determine whether the provided path is a zip archive or a loose shapefile.
+        cleanup_path = None
+        upload_path = file_path
+
+        if file_path.lower().endswith('.zip'):
+            upload_path = file_path
+        elif file_path.lower().endswith('.shp'):
+            base_name, _ = os.path.splitext(file_path)
+            directory = os.path.dirname(file_path) or "."
+            basename_only = os.path.basename(base_name)
+            basename_lower = basename_only.lower()
+
+            required_extensions = ['.shp', '.shx', '.dbf']
+            matching_files = []
+            available_extensions = set()
+            for filename in os.listdir(directory):
+                file_full_path = os.path.join(directory, filename)
+                if not os.path.isfile(file_full_path):
+                    continue
+                name_root, ext = os.path.splitext(filename)
+                if name_root.lower() == basename_lower and ext.lower() != '.zip':
+                    matching_files.append(filename)
+                    available_extensions.add(ext.lower())
+
+            missing_components = [ext for ext in required_extensions if ext not in available_extensions]
+            if missing_components:
+                missing_str = ', '.join(missing_components)
+                raise ValueError(
+                    f"Missing required shapefile component(s) for '{file_path}': {missing_str}"
+                )
+
+            fd, temp_zip_path = tempfile.mkstemp(suffix=".zip")
+            os.close(fd)
+            try:
+                with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for filename in matching_files:
+                        file_to_add = os.path.join(directory, filename)
+                        zipf.write(file_to_add, arcname=filename)
+                upload_path = temp_zip_path
+                cleanup_path = temp_zip_path
+            except Exception:
+                if os.path.exists(temp_zip_path):
+                    os.remove(temp_zip_path)
+                raise
+        else:
+            raise ValueError("Shapefile must be provided as a .zip archive or a .shp file with accompanying components.")
+
+        try:
+            with open(upload_path, "rb") as f:
+                response = requests.put(url, auth=self.auth, data=f, headers=headers)
+        finally:
+            if cleanup_path and os.path.exists(cleanup_path):
+                os.remove(cleanup_path)
         return response
 
     def upload_style(self, workspace: str, style_name: str, file_path: str):
