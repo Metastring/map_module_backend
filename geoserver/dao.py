@@ -3,6 +3,7 @@ import requests
 import os
 import tempfile
 import zipfile
+import shutil
 
 
 class GeoServerDAO:

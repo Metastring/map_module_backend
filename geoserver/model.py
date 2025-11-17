@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, validator
 from typing import Optional, List, Dict, Any
 import re
+from upload_log.models.model import UploadLogOut
 
 class UploadRequest(BaseModel):
     resource_type: str = Field(..., description="Type of resource (e.g., 'shapefile', 'style', 'dataset', 'postgis')")
@@ -110,3 +111,21 @@ class SchemaTablesResponse(BaseModel):
     db_schema: str = Field(..., description="Schema name")
     workspace: str = Field(..., description="Workspace name")
     datastore: str = Field(..., description="Datastore name")
+
+class PublishUploadLogRequest(BaseModel):
+    workspace: str = Field(..., description="Target GeoServer workspace")
+    store_name: Optional[str] = Field(None, description="Name of the datastore to create/use")
+    layer_name: Optional[str] = Field(None, description="Name of the layer to register")
+
+    @validator('workspace')
+    def validate_workspace(cls, value: str) -> str:
+        if not value or not value.strip():
+            raise ValueError('workspace must be provided')
+        if not re.match(r'^[a-zA-Z0-9_-]+$', value):
+            raise ValueError('workspace must contain only letters, numbers, underscores, and hyphens')
+        return value.strip()
+
+class PublishUploadLogResponse(BaseModel):
+    message: str
+    status_code: int
+    upload_log: UploadLogOut

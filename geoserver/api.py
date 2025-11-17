@@ -7,6 +7,7 @@ from geoserver.model import UploadRequest
 from geoserver.model import UpdateRequest
 from geoserver.model import PostGISRequest
 from geoserver.model import CreateLayerRequest
+from geoserver.model import PublishUploadLogRequest, PublishUploadLogResponse
 from geoserver.service import GeoServerService
 from geoserver.dao import GeoServerDAO
 import shutil
@@ -15,6 +16,8 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from utils.config import *
 from typing import List
+from sqlalchemy.orm import Session
+from database.database import get_db
 
 # Initialize router
 router = APIRouter()
@@ -33,18 +36,24 @@ geo_service = GeoServerService(geo_dao)
 # geo_service = GeoServerService()
 
 @router.post("/upload")
-async def upload_resource(request: UploadRequest):
+async def upload_resource(
+    workspace: str = Form(...),
+    store_name: str = Form(...),
+    resource_type: str = Form(...),
+    file: UploadFile = File(...)
+):
     """
-    Common POST API to upload resources to GeoServer.
+    Upload a resource (shapefile/style) to GeoServer from any device.
     """
     try:
-        response = await geo_service.upload_resource(request)
+        response = await geo_service.upload_resource(workspace, store_name, resource_type, file)
         if response.status_code in [200, 201]:
             return {"message": "Resource uploaded successfully!", "status_code": response.status_code}
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
 
 @router.post("/upload-postgis")
 async def upload_postgis(request: PostGISRequest):
@@ -472,4 +481,39 @@ async def get_layer_data(layer: str, maxFeatures: int = 100, bbox: str = None, f
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/publish-upload-log")
+async def publish_upload_log(request: PublishUploadLogRequest, db: Session = Depends(get_db)):
+    """
+    Publish a stored upload log to GeoServer.
+    """
+    try:
+        response = await geo_service.publish_upload_log(request, db)
+        if response.status_code == 200:
+            return {"message": "Upload log published successfully!", "status_code": response.status_code}
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/upload_logs/{log_id}/publish", response_model=PublishUploadLogResponse)
+async def publish_upload_log(
+    log_id: int,
+    request: PublishUploadLogRequest,
+    db: Session = Depends(get_db),
+):
+    try:
+        return geo_service.publish_upload_log(log_id, request, db)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "not found" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 

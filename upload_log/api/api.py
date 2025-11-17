@@ -1,0 +1,224 @@
+import logging
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import List, Optional
+from uuid import uuid4
+
+import aiofiles
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from sqlalchemy.orm import Session
+
+from database.database import get_db
+from upload_log.models.model import DataType, UploadLogCreate, UploadLogFilter, UploadLogOut
+from upload_log.service.metadata import derive_file_metadata
+from upload_log.service.service import UploadLogService
+from geoserver.dao import GeoServerDAO
+from geoserver.service import GeoServerService
+from upload_log.dao.dao import UploadLogDAO
+from utils.config import geoserver_host, geoserver_port, geoserver_username, geoserver_password
+from types import SimpleNamespace
+
+router = APIRouter()
+LOGGER = logging.getLogger(__name__)
+UPLOADS_DIR = Path(__file__).resolve().parents[2] / "uploads"
+GEOSERVER_WORKSPACE = "metastring"
+
+geo_dao = GeoServerDAO(
+    base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
+    username=geoserver_username,
+    password=geoserver_password,
+)
+geo_service = GeoServerService(geo_dao)
+
+
+async def _persist_upload(file: UploadFile) -> Path:
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File name is required")
+
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    file_suffix = Path(file.filename).suffix
+    unique_name = f"{uuid4().hex}{file_suffix}"
+    destination = UPLOADS_DIR / unique_name
+
+    try:
+        async with aiofiles.open(destination, "wb") as out_file:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                await out_file.write(chunk)
+    except Exception as exc:
+        if destination.exists():
+            destination.unlink(missing_ok=True)
+        LOGGER.error("Failed to persist upload %s: %s", file.filename, exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist file") from exc
+    finally:
+        await file.close()
+
+    return destination
+
+
+@router.post(
+    "/upload",
+    response_model=UploadLogOut,
+    status_code=status.HTTP_200_OK,
+)
+async def upload_dataset(
+    file: UploadFile = File(...),
+    uploaded_by: str = Form(...),
+    layer_name: Optional[str] = Form(None),
+    geoserver_layer: Optional[str] = Form(None),
+    tags: Optional[List[str]] = Form(None),
+    db: Session = Depends(get_db),
+) -> UploadLogOut:
+    """Accept spatial data uploads, extract metadata, and log the upload."""
+    stored_path = await _persist_upload(file)
+
+    try:
+        metadata = derive_file_metadata(stored_path)
+    except Exception as exc:
+        LOGGER.error("Failed to derive metadata for %s: %s", stored_path, exc)
+        stored_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to read spatial metadata") from exc
+
+    resolved_layer_name = layer_name or metadata.get("layer_name") or Path(file.filename).stem
+    data_type = metadata.get("data_type") or DataType.UNKNOWN
+    file_format = metadata.get("file_format") or stored_path.suffix.lstrip(".")
+
+    upload_log = UploadLogCreate(
+        layer_name=resolved_layer_name,
+        file_format=file_format,
+        data_type=data_type,
+        crs=metadata.get("crs"),
+        bbox=metadata.get("bbox"),
+        source_path=os.fspath(stored_path),
+        geoserver_layer=geoserver_layer,
+        tags=tags,
+        uploaded_by=uploaded_by,
+    )
+
+    created_log = UploadLogService.create(upload_log, db)
+    await _publish_to_geoserver(created_log, db)
+    return created_log
+
+
+async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
+    if not upload_log.file_format or upload_log.file_format.lower() != "shp":
+        return
+
+    file_path = Path(upload_log.source_path)
+    if not file_path.exists():
+        LOGGER.error("Stored upload file not found for GeoServer publication: %s", file_path)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Stored upload file is missing; cannot publish to GeoServer.",
+        )
+
+    store_name = upload_log.layer_name
+    try:
+        file_handle = file_path.open("rb")
+    except OSError as exc:
+        LOGGER.error("Failed to open stored upload for GeoServer publication: %s", exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unable to open stored upload file for GeoServer.",
+        ) from exc
+
+    upload_file = SimpleNamespace(file=file_handle, filename=file_path.name)
+
+    try:
+        response = await geo_service.upload_resource(
+            workspace=GEOSERVER_WORKSPACE,
+            store_name=store_name,
+            resource_type="shapefile",
+            file=upload_file,
+        )
+    except ValueError as exc:
+        LOGGER.error("GeoServer rejected upload for layer %s: %s", store_name, exc)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except Exception as exc:
+        LOGGER.error("Unexpected error uploading layer %s to GeoServer: %s", store_name, exc)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Unexpected error occurred while publishing to GeoServer.",
+        ) from exc
+    finally:
+        if hasattr(upload_file.file, "closed") and not upload_file.file.closed:
+            upload_file.file.close()
+
+    if response.status_code not in (200, 201):
+        LOGGER.error(
+            "GeoServer upload failed for layer %s with status %s: %s",
+            store_name,
+            response.status_code,
+            response.text,
+        )
+        raise HTTPException(status_code=response.status_code, detail=response.text)
+
+    try:
+        db_record = UploadLogDAO.get_by_id(upload_log.id, db)
+        if db_record:
+            db_record.geoserver_layer = store_name
+            db.add(db_record)
+            db.commit()
+            db.refresh(db_record)
+            upload_log.geoserver_layer = store_name
+    except Exception as exc:
+        LOGGER.error(
+            "Failed to update GeoServer publication details for upload log %s: %s",
+            upload_log.id,
+            exc,
+        )
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="GeoServer upload succeeded, but updating the upload log failed.",
+        ) from exc
+
+
+@router.get("/", response_model=List[UploadLogOut])
+def list_upload_logs(
+    db: Session = Depends(get_db),
+    id: Optional[int] = Query(default=None),
+    layer_name: Optional[str] = Query(default=None),
+    file_format: Optional[str] = Query(default=None),
+    data_type: Optional[DataType] = Query(default=None),
+    crs: Optional[str] = Query(default=None),
+    source_path: Optional[str] = Query(default=None),
+    geoserver_layer: Optional[str] = Query(default=None),
+    tags: Optional[List[str]] = Query(default=None),
+    uploaded_by: Optional[str] = Query(default=None),
+    uploaded_on: Optional[str] = Query(default=None),
+) -> List[UploadLogOut]:
+    """List upload logs with optional filtering."""
+    uploaded_on_dt: Optional[datetime] = None
+    if uploaded_on:
+        try:
+            uploaded_on_dt = datetime.fromisoformat(uploaded_on)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="uploaded_on must be ISO formatted") from exc
+
+    filter_payload = UploadLogFilter(
+        id=id,
+        layer_name=layer_name,
+        file_format=file_format,
+        data_type=data_type,
+        crs=crs,
+        source_path=source_path,
+        geoserver_layer=geoserver_layer,
+        tags=tags,
+        uploaded_by=uploaded_by,
+        uploaded_on=uploaded_on_dt,
+    )
+
+    return UploadLogService.get_filtered(filter_payload, db)
+
+
+@router.get("/{log_id}", response_model=UploadLogOut)
+def get_upload_log(log_id: int, db: Session = Depends(get_db)) -> UploadLogOut:
+    record = UploadLogService.get_by_id(log_id, db)
+    if not record:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload log not found")
+    return record
+

@@ -12,3 +12,6 @@ boto3
 jinja2
 httpx
 aiofiles
+fiona
+rasterio
+pyproj

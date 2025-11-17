@@ -1,7 +1,19 @@
+import os
 from geoserver.dao import GeoServerDAO
-from geoserver.model import UploadRequest, UpdateRequest, PostGISRequest, CreateLayerRequest
-from typing import List, Dict
+from geoserver.model import (
+    CreateLayerRequest,
+    PostGISRequest,
+    PublishUploadLogRequest,
+    PublishUploadLogResponse,
+    UpdateRequest,
+)
+from upload_log.dao.dao import UploadLogDAO
+from upload_log.models.model import DataType, UploadLogOut
+from sqlalchemy.orm import Session
 from utils.config import DATASET_MAPPING
+import tempfile
+import shutil
+from typing import List, Dict
 
 class GeoServerService:
     def __init__(self, dao: GeoServerDAO):
@@ -9,22 +21,29 @@ class GeoServerService:
         # self.dao = GeoServerDAO(base_url="http://localhost:8080/geoserver/rest", username="admin", password="geoserver")
 
 
-    async def upload_resource(self, request: UploadRequest):
+    async def upload_resource(self, workspace: str, store_name: str, resource_type: str, file):
         """
-        Handle resource upload based on the resource type.
+        Accept uploaded file from client and pass to DAO for GeoServer upload.
         """
-        if request.resource_type == "shapefile":
-            if not request.store_name:
-                raise ValueError("Store name is required for shapefile uploads.")
-            return self.dao.upload_shapefile(request.workspace, request.store_name, request.file_path)
-        elif request.resource_type == "style":
-            if not request.style_name:
-                raise ValueError("Style name is required for style uploads.")
-            return self.dao.upload_style(request.workspace, request.style_name, request.file_path)
-        elif request.resource_type == "postgis":
-            raise ValueError("PostGIS uploads should use the dedicated upload_postgis method.")
-        else:
-            raise ValueError(f"Unsupported resource type: {request.resource_type}")
+        if resource_type != "shapefile":
+            raise ValueError(f"Unsupported resource type: {resource_type}")
+
+        # Save uploaded file temporarily
+        suffix = ".zip" if file.filename.endswith(".zip") else ""
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+
+        # Upload to GeoServer
+        response = self.dao.upload_shapefile(workspace, store_name, tmp_path)
+
+        # Clean up local temp file
+        try:
+            file.file.close()
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        return response
 
     async def upload_postgis(self, request: PostGISRequest):
         """
@@ -52,6 +71,61 @@ class GeoServerService:
             schema=request.db_schema,
             description=request.description,
             enabled=request.enabled
+        )
+
+    def publish_upload_log(
+        self,
+        log_id: int,
+        publish_request: PublishUploadLogRequest,
+        db: Session,
+    ) -> PublishUploadLogResponse:
+        record = UploadLogDAO.get_by_id(log_id, db)
+        if not record:
+            raise ValueError(f"Upload log with id {log_id} not found")
+
+        file_path = record.source_path
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"Stored file not found at path: {file_path}")
+
+        workspace = publish_request.workspace.strip()
+        store_name = publish_request.store_name or record.layer_name
+        layer_name = publish_request.layer_name or record.layer_name
+
+        response = self.dao.upload_shapefile(workspace, store_name, file_path)
+        if response.status_code not in (200, 201):
+            raise RuntimeError(
+                f"GeoServer upload failed with status {response.status_code}: {response.text}"
+            )
+
+        record.geoserver_layer = layer_name
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+
+        return PublishUploadLogResponse(
+            message=f"Uploaded to GeoServer workspace '{workspace}' store '{store_name}'",
+            status_code=response.status_code,
+            upload_log=self._convert_upload_log(record),
+        )
+
+    def _convert_upload_log(self, record) -> UploadLogOut:
+        try:
+            data_type = DataType(record.data_type)
+        except ValueError:
+            data_type = DataType.UNKNOWN
+
+        return UploadLogOut(
+            id=record.id,
+            layer_name=record.layer_name,
+            file_format=record.file_format,
+            data_type=data_type,
+            crs=record.crs,
+            bbox=record.bbox,
+            source_path=record.source_path,
+            geoserver_layer=record.geoserver_layer,
+            tags=record.tags,
+            uploaded_by=record.uploaded_by,
+            uploaded_on=record.uploaded_on,
         )
 
     def list_workspaces(self):
