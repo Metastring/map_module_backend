@@ -1,6 +1,6 @@
-# CML APIs - Map Module Backend
+# Unified Data Management System
 
-A comprehensive backend service that helps researchers and scientists work with biodiversity and geographical data through interactive maps and spatial queries.
+A comprehensive FastAPI backend system for managing multiple types of geospatial and tabular datasets with dynamic attributes, advanced querying capabilities, and automatic GeoServer integration.
 
 ## What This System Does
 
