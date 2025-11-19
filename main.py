@@ -5,6 +5,9 @@ from upload_log.api.api import router as upload_log_router
 # Import the new spatial queries API
 from queries.api.api import SpatialQueryAPI1  # Import the original API for comparison
 
+# Import metadata GraphQL API
+from metadata.api.api import metadata_app
+
 # Allow CORS (if needed)
 from fastapi.middleware.cors import CORSMiddleware
 origins = ["*"]
@@ -21,6 +24,7 @@ app.add_middleware(
 app.include_router(geoserver_router, tags=["geoserver"])  # Add the GeoServer API router
 app.include_router(SpatialQueryAPI1.router, prefix=SpatialQueryAPI1.version, tags=["spatial-graphql-copy"])  # Add copy spatial queries GraphQL endpoint
 app.include_router(upload_log_router, prefix="/upload_log", tags=["upload-log"])
+app.include_router(metadata_app, prefix="/metadata", tags=["metadata-graphql"])  # Add metadata GraphQL endpoint
 
 # Add health check endpoint for GraphQL service
 @app.get("/health")
@@ -40,6 +44,7 @@ async def root():
                 "detail": "/upload_log/{id}"
             },
             "geoserver": "/geoserver",
+            "metadata_graphql": "/metadata",
             "health_check": "/health"
         }
     }

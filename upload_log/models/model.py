@@ -1,6 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from typing import Dict, List, Optional
+import uuid
 
 from pydantic import BaseModel, Field, validator
 
@@ -42,15 +43,15 @@ class UploadLogCreate(UploadLogBase):
 
 
 class UploadLogOut(UploadLogBase):
-    id: int
+    id: uuid.UUID
     uploaded_on: datetime
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 
 class UploadLogFilter(BaseModel):
-    id: Optional[int] = None
+    id: Optional[uuid.UUID] = None
     layer_name: Optional[str] = None
     file_format: Optional[str] = None
     data_type: Optional[DataType] = None

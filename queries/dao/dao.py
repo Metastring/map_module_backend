@@ -3,6 +3,12 @@ from shapely.geometry.base import BaseGeometry
 from sqlalchemy.sql import text
 from database.database import engine
 from typing import List, Dict, Union
+import configparser
+
+# Read schema from secure.ini
+config = configparser.ConfigParser()
+config.read("secure.ini")
+SCHEMA = config.get("DB_SCHEMA", "schema")
 
 # Accepts a Polygon object and returns results from datasets
 
@@ -17,7 +23,7 @@ def get_polygon_data_from_datasets(dataset: List[str], polygon: Polygon, limit: 
 					SELECT t.*, 
 					       ST_X(t.geom) AS longitude,
 					       ST_Y(t.geom) AS latitude
-					FROM public.{table} t
+					FROM {SCHEMA}.{table} t
 					WHERE ST_Intersects(
 						t.geom,
 						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
@@ -29,7 +35,7 @@ def get_polygon_data_from_datasets(dataset: List[str], polygon: Polygon, limit: 
 				query = text(f"""
 					SELECT t.*, 
 					       ST_AsGeoJSON(t.geom) AS geom_geojson
-					FROM public.{table} t
+					FROM {SCHEMA}.{table} t
 					WHERE ST_Intersects(
 						t.geom,
 						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
@@ -52,7 +58,7 @@ def get_multi_polygon_data_from_datasets(dataset: List[str], polygon: Union[Poly
 					SELECT t.*, 
 					       ST_X(t.geom) AS longitude,
 					       ST_Y(t.geom) AS latitude
-					FROM public.{table} t
+					FROM {SCHEMA}.{table} t
 					WHERE ST_Intersects(
 						t.geom,
 						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
@@ -63,7 +69,7 @@ def get_multi_polygon_data_from_datasets(dataset: List[str], polygon: Union[Poly
 				query = text(f"""
 					SELECT t.*, 
 					       ST_AsGeoJSON(t.geom) AS geom_geojson
-					FROM public.{table} t
+					FROM {SCHEMA}.{table} t
 					WHERE ST_Intersects(
 						t.geom,
 						ST_SetSRID(ST_GeomFromText(:wkt), 4326)
@@ -85,14 +91,14 @@ def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: lis
 					SELECT t.*,
 					       ST_X(t.geom) AS longitude,
 					       ST_Y(t.geom) AS latitude
-					FROM public.{table} t
+					FROM {SCHEMA}.{table} t
 					WHERE LOWER(t."scientificName") LIKE :name
 				''')
 			else:
 				query = text(f''' 
 					SELECT t.*,
 					       ST_AsGeoJSON(t.geom) AS geom_geojson
-					FROM public.{table} t
+					FROM {SCHEMA}.{table} t
 					WHERE LOWER(t."scientificName") LIKE :name
 				''')
 			res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})

@@ -15,3 +15,5 @@ aiofiles
 fiona
 rasterio
 pyproj
+pandas
+openpyxl

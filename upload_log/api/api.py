@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from uuid import uuid4
+from uuid import uuid4, UUID
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
@@ -59,11 +59,7 @@ async def _persist_upload(file: UploadFile) -> Path:
     return destination
 
 
-@router.post(
-    "/upload",
-    response_model=UploadLogOut,
-    status_code=status.HTTP_200_OK,
-)
+@router.post("/upload",response_model=UploadLogOut, status_code=status.HTTP_200_OK,)
 async def upload_dataset(
     file: UploadFile = File(...),
     uploaded_by: str = Form(...),
@@ -180,7 +176,7 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
 @router.get("/", response_model=List[UploadLogOut])
 def list_upload_logs(
     db: Session = Depends(get_db),
-    id: Optional[int] = Query(default=None),
+    id: Optional[UUID] = Query(default=None),
     layer_name: Optional[str] = Query(default=None),
     file_format: Optional[str] = Query(default=None),
     data_type: Optional[DataType] = Query(default=None),
@@ -216,9 +212,108 @@ def list_upload_logs(
 
 
 @router.get("/{log_id}", response_model=UploadLogOut)
-def get_upload_log(log_id: int, db: Session = Depends(get_db)) -> UploadLogOut:
+def get_upload_log(log_id: UUID, db: Session = Depends(get_db)) -> UploadLogOut:
     record = UploadLogService.get_by_id(log_id, db)
     if not record:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Upload log not found")
     return record
+
+
+########################## Upload xlsx file ##########################
+
+@router.post("/create-table-and-insert1/")
+async def create_table_and_insert1(
+    table_name: str = Form(...),
+    db_schema: str = Form(..., alias="schema"),
+    file: UploadFile = File(...),
+    uploaded_by: Optional[str] = Form(None),  # Optional - only for logging
+    layer_name: Optional[str] = Form(None),
+    tags: Optional[List[str]] = Form(None),
+    workspace: str = Form(default="metastring"),
+    store_name: Optional[str] = Form(default=None),
+    db: Session = Depends(get_db),
+):
+    if not file.filename or not file.filename.endswith(".xlsx"):
+        raise HTTPException(status_code=400, detail="Only XLSX files are allowed")
+
+    try:
+        # Generate dataset_id (will be used as id in upload_logs if logging is enabled)
+        dataset_id = uuid4()
+        created_log = None
+        
+        # Only create upload_log if uploaded_by is provided and not empty (backward compatible)
+        if uploaded_by and uploaded_by.strip():
+            try:
+                # Persist the file first for logging
+                stored_path = await _persist_upload(file)
+                
+                # Resolve layer_name
+                resolved_layer_name = layer_name or table_name
+                
+                # Create upload_log entry BEFORE any table creation/GeoServer operations
+                upload_log = UploadLogCreate(
+                    layer_name=resolved_layer_name,
+                    file_format="xlsx",
+                    data_type=DataType.UNKNOWN,
+                    crs="UNKNOWN",
+                    bbox=None,
+                    source_path=os.fspath(stored_path),
+                    geoserver_layer=None,
+                    tags=tags,
+                    uploaded_by=uploaded_by.strip(),
+                )
+                
+                # Create upload_log with specific id (dataset_id)
+                LOGGER.info(f"Creating upload log with dataset_id: {dataset_id}, uploaded_by: {uploaded_by}")
+                created_log = UploadLogService.create_with_id(upload_log, db, dataset_id)
+                LOGGER.info(f"Successfully created upload log with id: {created_log.id}")
+                
+                # Re-open the file for processing
+                file_handle = stored_path.open("rb")
+                upload_file = SimpleNamespace(file=file_handle, filename=stored_path.name)
+            except Exception as log_exc:
+                LOGGER.error(f"Failed to create upload log: {log_exc}", exc_info=True)
+                # Continue with the operation even if log creation fails (backward compatible)
+                # But log the error for debugging
+                upload_file = file
+        else:
+            # Old behavior: use file directly without persisting (backward compatible)
+            LOGGER.info("uploaded_by not provided or empty, skipping upload log creation")
+            upload_file = file
+        
+        try:
+            # Proceed with table creation and GeoServer upload (same as before)
+            message = await UploadLogService.create_table_and_insert1(
+                table_name=table_name,
+                schema=db_schema,
+                file=upload_file,
+                db=db,
+                geo_service=geo_service,
+                workspace=workspace,
+                store_name=store_name,
+                dataset_id=dataset_id,  # Use the generated dataset_id
+                upload_log_id=created_log.id if created_log else None
+            )
+            
+            # Update geoserver_layer after successful upload (only if logging was enabled)
+            if created_log and created_log.id:
+                try:
+                    UploadLogDAO.update_geoserver_layer(created_log.id, table_name, db)
+                except Exception as exc:
+                    LOGGER.warning("Failed to update geoserver_layer for upload log %s: %s", created_log.id, exc)
+                    # Don't fail the whole request if this update fails
+            
+            # Return response (backward compatible - old clients won't see upload_log_id)
+            response = {"message": message}
+            if created_log:
+                response["upload_log_id"] = str(created_log.id)
+            return response
+        finally:
+            # Only close if we opened a file handle (when logging is enabled)
+            if uploaded_by and hasattr(upload_file, 'file') and hasattr(upload_file.file, "closed") and not upload_file.file.closed:
+                upload_file.file.close()
+                
+    except Exception as e:
+        LOGGER.error("Error creating table and inserting data: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 

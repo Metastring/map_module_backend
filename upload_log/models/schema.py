@@ -1,17 +1,13 @@
 import configparser
-from sqlalchemy import Column, DateTime, Integer, String, func
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy import Column, DateTime, Integer, String, func, text
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.ext.declarative import declarative_base
 from database.database import engine
 
-# Read schema from secure.ini (if available) or use default
-try:
-    config = configparser.ConfigParser()
-    config.read("secure.ini")
-    SCHEMA = config.get("DB_SCHEMA", "schema")
-except Exception:
-    # Default schema name for CML
-    SCHEMA = "public"
+# Read schema from secure.ini
+config = configparser.ConfigParser()
+config.read("secure.ini")
+SCHEMA = config.get("DB_SCHEMA", "schema")
 
 Base = declarative_base()
 
@@ -20,7 +16,7 @@ class UploadLog(Base):
     __tablename__ = "upload_logs"
     __table_args__ = {"schema": SCHEMA}
 
-    id = Column(Integer, primary_key=True, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, index=True, server_default=text("gen_random_uuid()"))
     layer_name = Column(String, nullable=False)
     file_format = Column(String, nullable=False)
     data_type = Column(String, nullable=False)

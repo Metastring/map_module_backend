@@ -15,9 +15,14 @@ import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from utils.config import *
-from typing import List
+from typing import List, Dict, Optional
 from sqlalchemy.orm import Session
 from database.database import get_db
+from metadata.service.service import MetadataService
+from metadata.models.schema import Metadata
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Initialize router
 router = APIRouter()
@@ -148,18 +153,91 @@ async def get_datastore_details(workspace: str, datastore: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/layers")
-async def list_layers():
+def _map_metadata_to_layer(metadata: Metadata) -> Dict:
     """
-    List all layers in GeoServer.
+    Helper function to map metadata object to layer response dictionary.
+    """
+    return {
+        "id": str(metadata.id),
+        "geoserverName": metadata.geoserver_name,
+        "nameOfDataset": metadata.name_of_dataset,
+        "theme": metadata.theme,
+        "keywords": metadata.keywords,
+        "purposeOfCreatingData": metadata.purpose_of_creating_data,
+        "dataType": metadata.data_type,
+        "contactPerson": metadata.contact_person,
+        "organization": metadata.organization,
+        "contactEmail": metadata.contact_email,
+        "country": metadata.country,
+        "createdOn": metadata.created_on.isoformat() if metadata.created_on else None,
+        "updatedOn": metadata.updated_on.isoformat() if metadata.updated_on else None,
+        "accessConstraints": metadata.access_constraints,
+        "useConstraints": metadata.use_constraints,
+        "mailingAddress": metadata.mailing_address,
+        "cityLocalityCountry": metadata.city_locality_country
+    }
+
+
+@router.get("/layers")
+async def list_layers(db: Session = Depends(get_db)):
+    """
+    List all layers in GeoServer with metadata if available.
+    Uses batch fetching to optimize database queries.
     """
     try:
         response = geo_service.list_layers()
         if response.status_code == 200:
-            return response.json()
+            layers_data = response.json()
+            
+            # Extract layers list
+            layers_list = layers_data.get("layers", {}).get("layer", [])
+            
+            if not layers_list:
+                return {"layers": {"layer": []}}
+            
+            # Collect all layer names for batch metadata fetching
+            layer_names = [layer.get("name") for layer in layers_list if layer.get("name")]
+            
+            # Batch fetch all metadata in one query (solves N+1 problem)
+            metadata_dict: Dict[str, Metadata] = {}
+            if layer_names:
+                try:
+                    metadata_list = MetadataService.get_by_geoserver_names(layer_names, db)
+                    # Create a dictionary for O(1) lookup by geoserver_name
+                    metadata_dict = {meta.geoserver_name: meta for meta in metadata_list}
+                    logger.info(f"Found metadata for {len(metadata_dict)} out of {len(layer_names)} layers")
+                except Exception as e:
+                    logger.warning(f"Error batch fetching metadata: {str(e)}. Continuing without metadata.")
+            
+            # Enhance each layer with metadata if available
+            enhanced_layers = []
+            for layer in layers_list:
+                layer_name = layer.get("name")
+                enhanced_layer = {
+                    "name": layer.get("name"),
+                    "href": layer.get("href")
+                }
+                
+                # Add metadata if available
+                if layer_name and layer_name in metadata_dict:
+                    metadata = metadata_dict[layer_name]
+                    enhanced_layer.update(_map_metadata_to_layer(metadata))
+                
+                enhanced_layers.append(enhanced_layer)
+            
+            # Return the enhanced response
+            return {
+                "layers": {
+                    "layer": enhanced_layers
+                }
+            }
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
+    except HTTPException:
+        # Re-raise HTTPExceptions
+        raise
     except Exception as e:
+        logger.error(f"Error in list_layers: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/layers/{layer}")
