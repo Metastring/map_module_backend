@@ -1,6 +1,5 @@
 from urllib.parse import urlencode
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, HTTPException, Depends, Query, FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 import requests
 from geoserver.model import UploadRequest
@@ -193,7 +192,7 @@ async def list_layers(db: Session = Depends(get_db)):
             layers_list = layers_data.get("layers", {}).get("layer", [])
             
             if not layers_list:
-                return {"layers": {"layer": []}}
+                return []
             
             # Collect all layer names for batch metadata fetching
             layer_names = [layer.get("name") for layer in layers_list if layer.get("name")]
@@ -223,14 +222,19 @@ async def list_layers(db: Session = Depends(get_db)):
                     metadata = metadata_dict[layer_name]
                     enhanced_layer.update(_map_metadata_to_layer(metadata))
                 
+                # Add WMS tile URL for frontend rendering
+                if layer_name:
+                    try:
+                        tile_url = geo_service.get_tile_layer_url(layer_name)
+                        enhanced_layer["wms_link"] = tile_url
+                    except Exception as e:
+                        logger.warning(f"Failed to get WMS link for layer {layer_name}: {str(e)}")
+                        enhanced_layer["wms_link"] = None
+                
                 enhanced_layers.append(enhanced_layer)
             
-            # Return the enhanced response
-            return {
-                "layers": {
-                    "layer": enhanced_layers
-                }
-            }
+            # Return the enhanced response as a flat array
+            return enhanced_layers
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except HTTPException:
