@@ -181,10 +181,35 @@ class UploadLogService:
             logger.info(f"Adding geometry column to table {schema}.{table_name}")
             UploadLogDAO.add_geometry_column(table_name, schema, db)
 
-            # Step 4: Map geometry from world_geojson table
-            logger.info(f"Mapping geometry from world_geojson to table {schema}.{table_name}")
-            rows_updated = UploadLogDAO.map_geometry_from_world_geojson(table_name, schema, db)
-            logger.info(f"Updated {rows_updated} rows with geometry data")
+            # Step 4: Map geometry - prioritize geometry_wkt over state
+            # If geometry_wkt column exists and has data, use it and skip state logic
+            # Otherwise, use state logic
+            geometry_mapping_message = ""
+            has_geometry_wkt = "geometry_wkt" in df.columns
+            
+            if has_geometry_wkt:
+                # Check if geometry_wkt column has any non-null, non-empty values
+                has_wkt_data = df["geometry_wkt"].notna().any() and (df["geometry_wkt"].astype(str).str.strip() != "").any()
+                
+                if has_wkt_data:
+                    # Use geometry_wkt column - convert WKT to MULTIPOLYGON
+                    # Skip state logic when geometry_wkt is present (as per requirements)
+                    logger.info(f"Mapping geometry from geometry_wkt column to table {schema}.{table_name} (skipping state logic)")
+                    rows_updated = UploadLogDAO.map_geometry_from_wkt(table_name, schema, db)
+                    logger.info(f"Updated {rows_updated} rows with geometry from geometry_wkt")
+                    geometry_mapping_message = f"Geometry column populated from geometry_wkt ({rows_updated} rows updated)."
+                else:
+                    # geometry_wkt column exists but has no data, fall back to state logic
+                    logger.info(f"geometry_wkt column exists but has no data, falling back to state-based mapping")
+                    rows_updated = UploadLogDAO.map_geometry_from_world_geojson(table_name, schema, db)
+                    logger.info(f"Updated {rows_updated} rows with geometry from world_geojson")
+                    geometry_mapping_message = f"Geometry column populated from world_geojson using state column ({rows_updated} rows updated)."
+            else:
+                # No geometry_wkt column, use state logic
+                logger.info(f"Mapping geometry from world_geojson to table {schema}.{table_name}")
+                rows_updated = UploadLogDAO.map_geometry_from_world_geojson(table_name, schema, db)
+                logger.info(f"Updated {rows_updated} rows with geometry data")
+                geometry_mapping_message = f"Geometry column populated from world_geojson using state column ({rows_updated} rows updated)."
 
             # Step 5: Upload to GeoServer if geo_service is provided
             geoserver_message = ""
@@ -233,7 +258,7 @@ class UploadLogService:
 
             return (
                 f"Table '{table_name}' created in schema '{schema}' and data inserted successfully. "
-                f"Geometry column added and mapped from world_geojson ({rows_updated} rows updated)."
+                + geometry_mapping_message
                 + geoserver_message
             )
         except Exception as e:

@@ -211,3 +211,36 @@ class UploadLogDAO:
             db.rollback()
             raise e
 
+    @staticmethod
+    def map_geometry_from_wkt(table_name: str, schema: str, db: Session):
+        """
+        Convert geometry_wkt column (WKT format) to MULTIPOLYGON and store in geom column.
+        Handles POLYGON WKT format and converts it to MULTIPOLYGON.
+        """
+        try:
+            # Quote identifiers to prevent SQL injection
+            quoted_schema = _quote_identifier(schema)
+            quoted_table = _quote_identifier(table_name)
+            quoted_geometry_wkt = _quote_identifier("geometry_wkt")
+            
+            # SQL to convert WKT to MULTIPOLYGON geometry
+            # ST_GeomFromText converts WKT string to geometry
+            # ST_Multi converts POLYGON to MULTIPOLYGON
+            # Only update rows where geometry_wkt is not null and geom is null
+            sql = text(f"""
+                UPDATE {quoted_schema}.{quoted_table} AS t
+                SET geom = ST_Multi(ST_GeomFromText(t.{quoted_geometry_wkt}, 4326))::geometry(MULTIPOLYGON, 4326)
+                WHERE t.{quoted_geometry_wkt} IS NOT NULL
+                AND TRIM(t.{quoted_geometry_wkt}) != ''
+                AND t.geom IS NULL
+            """)
+            result = db.execute(sql)
+            db.commit()
+            rows_updated = result.rowcount
+            logger.info(f"Updated {rows_updated} rows with geometry from geometry_wkt column in table {schema}.{table_name}")
+            return rows_updated
+        except SQLAlchemyError as e:
+            logger.error(f"Error mapping geometry from geometry_wkt to table {schema}.{table_name}: {e}")
+            db.rollback()
+            raise e
+
