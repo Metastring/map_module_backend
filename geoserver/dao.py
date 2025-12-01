@@ -230,6 +230,32 @@ class GeoServerDAO:
         }
         return wms_url + "?" + urlencode(params)
 
+    def get_tile_layer_url_cml(self, layer: str):
+        """
+        Construct a WMS URL for fetching the tile layer in the format expected by the CML frontend.
+        Format: /wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&width=256&height=256&transparent=true&layers=biodiv:${layer_name}
+        """
+        # Extract layer name from workspace:layer format (e.g., "metastring:gbif" -> "gbif")
+        layer_name = layer.split(":")[-1] if ":" in layer else layer
+        
+        # Prepend "biodiv:" prefix as expected by frontend
+        layers_param = f"biodiv:{layer_name}"
+        
+        # Construct relative WMS URL path (frontend will prepend the endpoint)
+        params = {
+            "bbox": "{bbox-epsg-3857}",  # Placeholder for frontend to replace
+            "format": "image/png",
+            "service": "WMS",
+            "version": "1.1.1",
+            "request": "GetMap",
+            "srs": "EPSG:3857",
+            "width": "256",
+            "height": "256",
+            "transparent": "true",
+            "layers": layers_param
+        }
+        return "/wms?" + urlencode(params)
+
     def query_features(self, layer: str, bbox: str = None, filter_query: str = None, max_features: int = None, property_names: str = None):
         """
         Query features from a GeoServer WFS service.

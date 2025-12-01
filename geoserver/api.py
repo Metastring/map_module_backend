@@ -225,7 +225,7 @@ async def list_layers(db: Session = Depends(get_db)):
                 # Add WMS tile URL for frontend rendering
                 if layer_name:
                     try:
-                        tile_url = geo_service.get_tile_layer_url(layer_name)
+                        tile_url = geo_service.get_tile_layer_url_cml(layer_name)
                         enhanced_layer["wms_link"] = tile_url
                     except Exception as e:
                         logger.warning(f"Failed to get WMS link for layer {layer_name}: {str(e)}")

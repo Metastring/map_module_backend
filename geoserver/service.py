@@ -205,6 +205,9 @@ class GeoServerService:
     def get_tile_layer_url(self, layer: str):
         return self.dao.get_tile_layer_url(layer)
 
+    def get_tile_layer_url_cml(self, layer: str):
+        return self.dao.get_tile_layer_url_cml(layer)
+
     def query_layer_features(self, layer: str, bbox: str = None, filter_query: str = None):
         return self.dao.query_features(layer, bbox, filter_query)
 
