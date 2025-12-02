@@ -502,3 +502,229 @@ class GeoServerDAO:
         """
         return requests.get(url, auth=self.auth)
 
+    # =========================================================================
+    # MBStyle Management Methods
+    # =========================================================================
+    
+    def create_mbstyle(self, workspace: str, style_name: str, mbstyle_json: dict, 
+                       overwrite: bool = True) -> requests.Response:
+        """
+        Create or update an MBStyle (Mapbox Style) in GeoServer.
+        
+        Args:
+            workspace: GeoServer workspace name
+            style_name: Name for the style
+            mbstyle_json: MBStyle JSON object following Mapbox Style Spec v8
+            overwrite: If True, update existing style; if False, fail if exists
+            
+        Returns:
+            Response from GeoServer
+        """
+        # Check if style already exists
+        check_url = f"{self.base_url}/workspaces/{workspace}/styles/{style_name}.json"
+        check_response = requests.get(check_url, auth=self.auth)
+        style_exists = check_response.status_code == 200
+        
+        if style_exists and not overwrite:
+            raise Exception(f"Style '{style_name}' already exists in workspace '{workspace}'")
+        
+        # MBStyle content type
+        headers = {"Content-type": "application/vnd.geoserver.mbstyle+json"}
+        
+        if style_exists:
+            # Update existing style
+            url = f"{self.base_url}/workspaces/{workspace}/styles/{style_name}"
+            response = requests.put(url, auth=self.auth, json=mbstyle_json, headers=headers)
+        else:
+            # Create new style - first create the style entry, then upload content
+            # Step 1: Create style metadata
+            style_meta_url = f"{self.base_url}/workspaces/{workspace}/styles"
+            style_meta = {
+                "style": {
+                    "name": style_name,
+                    "format": "mbstyle",
+                    "filename": f"{style_name}.json"
+                }
+            }
+            meta_headers = {"Content-type": "application/json"}
+            meta_response = requests.post(style_meta_url, auth=self.auth, 
+                                         json=style_meta, headers=meta_headers)
+            
+            if meta_response.status_code not in [200, 201]:
+                return meta_response
+            
+            # Step 2: Upload MBStyle content
+            url = f"{self.base_url}/workspaces/{workspace}/styles/{style_name}"
+            response = requests.put(url, auth=self.auth, json=mbstyle_json, headers=headers)
+        
+        return response
+    
+    def get_mbstyle(self, workspace: str, style_name: str) -> requests.Response:
+        """
+        Get an MBStyle from GeoServer.
+        
+        Args:
+            workspace: GeoServer workspace name
+            style_name: Name of the style
+            
+        Returns:
+            Response containing MBStyle JSON
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/styles/{style_name}"
+        headers = {"Accept": "application/vnd.geoserver.mbstyle+json"}
+        return requests.get(url, auth=self.auth, headers=headers)
+    
+    def delete_style(self, workspace: str, style_name: str, 
+                     purge: bool = True, recurse: bool = False) -> requests.Response:
+        """
+        Delete a style from GeoServer.
+        
+        Args:
+            workspace: GeoServer workspace name
+            style_name: Name of the style to delete
+            purge: If True, also remove the style file from disk
+            recurse: If True, remove references in layers
+            
+        Returns:
+            Response from GeoServer
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/styles/{style_name}"
+        params = {
+            "purge": str(purge).lower(),
+            "recurse": str(recurse).lower()
+        }
+        return requests.delete(url, auth=self.auth, params=params)
+    
+    def set_layer_default_style(self, workspace: str, layer_name: str, 
+                                style_name: str, style_workspace: str = None) -> requests.Response:
+        """
+        Set the default style for a layer.
+        
+        Args:
+            workspace: Workspace containing the layer
+            layer_name: Name of the layer
+            style_name: Name of the style to set as default
+            style_workspace: Workspace containing the style (defaults to layer workspace)
+            
+        Returns:
+            Response from GeoServer
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/layers/{layer_name}"
+        headers = {"Content-type": "application/json"}
+        
+        # Build style reference
+        if style_workspace:
+            style_ref = f"{style_workspace}:{style_name}"
+        else:
+            style_ref = style_name
+        
+        layer_config = {
+            "layer": {
+                "defaultStyle": {
+                    "name": style_ref
+                }
+            }
+        }
+        
+        return requests.put(url, auth=self.auth, json=layer_config, headers=headers)
+    
+    def add_layer_style(self, workspace: str, layer_name: str, 
+                        style_name: str, style_workspace: str = None) -> requests.Response:
+        """
+        Add an additional style to a layer (not as default).
+        
+        Args:
+            workspace: Workspace containing the layer
+            layer_name: Name of the layer
+            style_name: Name of the style to add
+            style_workspace: Workspace containing the style (defaults to layer workspace)
+            
+        Returns:
+            Response from GeoServer
+        """
+        # First get current layer info
+        layer_url = f"{self.base_url}/workspaces/{workspace}/layers/{layer_name}.json"
+        layer_response = requests.get(layer_url, auth=self.auth)
+        
+        if layer_response.status_code != 200:
+            return layer_response
+        
+        layer_data = layer_response.json()
+        
+        # Get existing styles
+        existing_styles = layer_data.get("layer", {}).get("styles", {}).get("style", [])
+        if not isinstance(existing_styles, list):
+            existing_styles = [existing_styles] if existing_styles else []
+        
+        # Build style reference
+        if style_workspace:
+            style_ref = f"{style_workspace}:{style_name}"
+        else:
+            style_ref = style_name
+        
+        # Add new style to list
+        existing_styles.append({"name": style_ref})
+        
+        # Update layer
+        update_url = f"{self.base_url}/workspaces/{workspace}/layers/{layer_name}"
+        headers = {"Content-type": "application/json"}
+        
+        layer_config = {
+            "layer": {
+                "styles": {
+                    "style": existing_styles
+                }
+            }
+        }
+        
+        return requests.put(update_url, auth=self.auth, json=layer_config, headers=headers)
+    
+    def list_styles(self, workspace: str = None) -> requests.Response:
+        """
+        List all styles in a workspace or globally.
+        
+        Args:
+            workspace: Optional workspace name. If None, lists global styles.
+            
+        Returns:
+            Response containing list of styles
+        """
+        if workspace:
+            url = f"{self.base_url}/workspaces/{workspace}/styles.json"
+        else:
+            url = f"{self.base_url}/styles.json"
+        
+        return requests.get(url, auth=self.auth)
+    
+    def get_style_info(self, style_name: str, workspace: str = None) -> requests.Response:
+        """
+        Get metadata information about a style.
+        
+        Args:
+            style_name: Name of the style
+            workspace: Optional workspace name
+            
+        Returns:
+            Response containing style metadata
+        """
+        if workspace:
+            url = f"{self.base_url}/workspaces/{workspace}/styles/{style_name}.json"
+        else:
+            url = f"{self.base_url}/styles/{style_name}.json"
+        
+        return requests.get(url, auth=self.auth)
+    
+    def get_layer_styles(self, workspace: str, layer_name: str) -> requests.Response:
+        """
+        Get all styles associated with a layer.
+        
+        Args:
+            workspace: Workspace containing the layer
+            layer_name: Name of the layer
+            
+        Returns:
+            Response containing layer style information
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/layers/{layer_name}.json"
+        return requests.get(url, auth=self.auth)
+

@@ -99,6 +99,56 @@ The system connects to PostgreSQL databases containing:
 - **Health Check**: `/health` - System status monitoring
 - **Documentation**: `/` - API information and endpoints
 
+### 🎨 Automated Styling System (styles folder)
+**What it does**: Creates professional map styles automatically based on your data.
+
+The styling system is a **metadata-driven** solution that:
+1. **Reads Column Info**: Queries PostGIS to understand your data columns (numeric vs categorical)
+2. **Computes Class Breaks**: Uses classification algorithms to divide data into meaningful ranges
+3. **Builds MBStyle JSON**: Generates Mapbox-compatible style definitions
+4. **Publishes to GeoServer**: Uploads styles directly to the map server
+5. **Attaches to Layers**: Sets the style as default for your layer
+
+**Key Features**:
+- **Multiple Classification Methods**:
+  - Equal Interval: Divides data range into equal parts
+  - Quantile: Equal number of features per class
+  - Jenks Natural Breaks: Optimizes class boundaries for natural groupings
+  - Categorical: Uses distinct values for categories
+
+- **ColorBrewer Palettes**: Professional color schemes including:
+  - Sequential: YlOrRd, Blues, Greens, Purples, Oranges, Greys
+  - Diverging: RdYlGn, RdBu, BrBG, PuOr
+  - Qualitative: Set1, Set2, Set3, Paired, Pastel1
+
+- **Geometry Support**: Works with Points, Lines, and Polygons
+
+**API Endpoints**:
+- `POST /styles/generate` - Generate and publish a new style
+- `POST /styles/preview` - Preview style without saving
+- `GET /styles/metadata` - List all style configurations
+- `GET /styles/metadata/{id}` - Get specific style details
+- `GET /styles/legend/{style_id}` - Get legend for a style
+- `GET /styles/palettes` - List available color palettes
+- `POST /styles/regenerate/{style_id}` - Regenerate style from current data
+
+**Example Request**:
+```json
+POST /styles/generate
+{
+  "layer_name": "health_cases",
+  "workspace": "my_workspace",
+  "table_name": "health_cases",
+  "style_column": "cases_count",
+  "geometry_type": "polygon",
+  "classification_method": "quantile",
+  "num_classes": 5,
+  "color_palette": "YlOrRd",
+  "publish_to_geoserver": true,
+  "set_as_default": true
+}
+```
+
 ## Configuration
 
 The system uses configuration files to connect to different environments:
