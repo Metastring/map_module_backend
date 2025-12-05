@@ -1,24 +1,18 @@
 import os
+import shutil
+import tempfile
+from typing import List, Dict
+from sqlalchemy.orm import Session
 from geoserver.dao import GeoServerDAO
-from geoserver.model import (
-    CreateLayerRequest,
-    PostGISRequest,
-    PublishUploadLogRequest,
-    PublishUploadLogResponse,
-    UpdateRequest,
-)
+from geoserver.model import CreateLayerRequest, PostGISRequest, PublishUploadLogRequest, PublishUploadLogResponse, UpdateRequest
 from upload_log.dao.dao import UploadLogDAO
 from upload_log.models.model import DataType, UploadLogOut
-from sqlalchemy.orm import Session
 from utils.config import DATASET_MAPPING
-import tempfile
-import shutil
-from typing import List, Dict
+
 
 class GeoServerService:
     def __init__(self, dao: GeoServerDAO):
         self.dao = dao
-        # self.dao = GeoServerDAO(base_url="http://localhost:8080/geoserver/rest", username="admin", password="geoserver")
 
 
     async def upload_resource(self, workspace: str, store_name: str, resource_type: str, file):
@@ -153,7 +147,7 @@ class GeoServerService:
 
     def get_layer_details(self, layer: str):
         return self.dao.get_layer_details(layer)
-    
+
     def delete_workspace(self, workspace: str):
         """
         Delete a workspace.
@@ -171,13 +165,13 @@ class GeoServerService:
         Delete a layer.
         """
         return self.dao.delete_layer(layer)
-    
+
     def delete_style(self, style: str):
         """
         Delete a style.
         """
         return self.dao.delete_style(style)
-    
+
     def update_workspace(self, workspace: str, request: UpdateRequest):
         """
         Update a workspace.
@@ -201,7 +195,7 @@ class GeoServerService:
         Update a style.
         """
         return self.dao.update_style(style, request)
-    
+
     def get_tile_layer_url(self, layer: str):
         return self.dao.get_tile_layer_url(layer)
 

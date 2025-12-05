@@ -1,25 +1,22 @@
-from urllib.parse import urlencode
-from fastapi import APIRouter, HTTPException, Depends, Query, FastAPI, UploadFile, File, Form
-from fastapi.responses import JSONResponse
-import requests
-from geoserver.model import UploadRequest
-from geoserver.model import UpdateRequest
-from geoserver.model import PostGISRequest
-from geoserver.model import CreateLayerRequest
-from geoserver.model import PublishUploadLogRequest, PublishUploadLogResponse
-from geoserver.service import GeoServerService
-from geoserver.dao import GeoServerDAO
-import shutil
 import os
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
-from utils.config import *
+import logging
 from typing import List, Dict, Optional
+from urllib.parse import urlencode
+import requests
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
 from sqlalchemy.orm import Session
 from database.database import get_db
-from metadata.service.service import MetadataService
+from geoserver.dao import GeoServerDAO
+from geoserver.model import (CreateLayerRequest, PostGISRequest, PublishUploadLogRequest, PublishUploadLogResponse, UpdateRequest)
+from geoserver.service import GeoServerService
 from metadata.models.schema import Metadata
-import logging
+from metadata.service.service import MetadataService
+from styles.dao.dao import StyleDAO
+from styles.service.style_service import StyleService
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
+from utils.config import *  # noqa: E402, F403
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +24,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # Initialize DAO and Service with configuration
-# You can override these values in your config.py file
-# Use values directly from config.py
-# geoserver_host, geoserver_port, geoserver_username, geoserver_password are imported from config
-
 geo_dao = GeoServerDAO(
-    base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest", 
-    username=geoserver_username, 
+    base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
+    username=geoserver_username,
     password=geoserver_password
 )
 geo_service = GeoServerService(geo_dao)
-# geo_service = GeoServerService()
 
 @router.post("/upload")
 async def upload_resource(
@@ -68,7 +60,7 @@ async def upload_postgis(request: PostGISRequest):
         response = await geo_service.upload_postgis(request)
         if response.status_code in [200, 201]:
             return {
-                "message": f"PostGIS datastore '{request.store_name}' created successfully!", 
+                "message": f"PostGIS datastore '{request.store_name}' created successfully!",
                 "status_code": response.status_code,
                 "workspace": request.workspace,
                 "store_name": request.store_name,
@@ -81,7 +73,8 @@ async def upload_postgis(request: PostGISRequest):
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-        
+
+
 @router.get("/workspaces")
 async def list_workspaces():
     """
@@ -104,7 +97,10 @@ async def create_workspace(workspace_name: str):
     try:
         response = geo_service.create_workspace(workspace_name)
         if response.status_code in [200, 201]:
-            return {"message": f"Workspace '{workspace_name}' created successfully!", "status_code": response.status_code}
+            return {
+                "message": f"Workspace '{workspace_name}' created successfully!",
+                "status_code": response.status_code
+            }
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
@@ -177,6 +173,21 @@ def _map_metadata_to_layer(metadata: Metadata) -> Dict:
     }
 
 
+def _format_column_name(column_name: str) -> str:
+    """
+    Convert column name to human-readable title.
+    Examples:
+    - species_count -> Species Count
+    - year_of_observation -> Year Of Observation
+    - geology -> Geology
+    """
+    # Replace underscores with spaces
+    title = column_name.replace("_", " ")
+    # Capitalize first letter of each word
+    title = " ".join(word.capitalize() for word in title.split())
+    return title
+
+
 @router.get("/layers")
 async def list_layers(db: Session = Depends(get_db)):
     """
@@ -187,16 +198,16 @@ async def list_layers(db: Session = Depends(get_db)):
         response = geo_service.list_layers()
         if response.status_code == 200:
             layers_data = response.json()
-            
+
             # Extract layers list
             layers_list = layers_data.get("layers", {}).get("layer", [])
-            
+
             if not layers_list:
-                return []
-            
+                return {"layers": {"layer": []}}
+
             # Collect all layer names for batch metadata fetching
             layer_names = [layer.get("name") for layer in layers_list if layer.get("name")]
-            
+
             # Batch fetch all metadata in one query (solves N+1 problem)
             metadata_dict: Dict[str, Metadata] = {}
             if layer_names:
@@ -204,11 +215,52 @@ async def list_layers(db: Session = Depends(get_db)):
                     metadata_list = MetadataService.get_by_geoserver_names(layer_names, db)
                     # Create a dictionary for O(1) lookup by geoserver_name
                     metadata_dict = {meta.geoserver_name: meta for meta in metadata_list}
-                    logger.info(f"Found metadata for {len(metadata_dict)} out of {len(layer_names)} layers")
+                    logger.info(
+                        f"Found metadata for {len(metadata_dict)} out of {len(layer_names)} layers"
+                    )
                 except Exception as e:
-                    logger.warning(f"Error batch fetching metadata: {str(e)}. Continuing without metadata.")
-            
-            # Enhance each layer with metadata if available
+                    logger.warning(
+                        f"Error batch fetching metadata: {str(e)}. Continuing without metadata."
+                    )
+
+            # Get styles for all layers (batch fetch)
+            # Extract workspace and table names from layer names
+            # (e.g., "ne:gbif" -> workspace="ne", table="gbif")
+            layer_to_workspace_table = {}
+            unique_workspace_table_pairs = set()
+            for layer in layers_list:
+                layer_name = layer.get("name")
+                if layer_name:
+                    if ":" in layer_name:
+                        workspace_name = layer_name.split(":")[0]
+                        table_name = layer_name.split(":")[-1]
+                    else:
+                        workspace_name = None  # No workspace prefix
+                        table_name = layer_name
+                    layer_to_workspace_table[layer_name] = (workspace_name, table_name)
+                    if workspace_name:
+                        unique_workspace_table_pairs.add((workspace_name, table_name))
+
+            # Batch fetch styles for all workspace+table combinations
+            styles_by_workspace_table = {}
+            style_dao = None
+            if unique_workspace_table_pairs:
+                try:
+                    style_dao = StyleDAO(db)
+                    # Fetch all active styles (we'll filter by workspace+table in memory)
+                    all_styles, _ = style_dao.list_styles(is_active=True, skip=0, limit=10000)
+
+                    # Group styles by workspace and table name
+                    for style in all_styles:
+                        key = (style.workspace, style.layer_table_name)
+                        if key in unique_workspace_table_pairs:
+                            if key not in styles_by_workspace_table:
+                                styles_by_workspace_table[key] = []
+                            styles_by_workspace_table[key].append(style)
+                except Exception as e:
+                    logger.warning(f"Error fetching styles: {str(e)}. Continuing without styles.")
+
+            # Enhance each layer with metadata and styles
             enhanced_layers = []
             for layer in layers_list:
                 layer_name = layer.get("name")
@@ -216,25 +268,65 @@ async def list_layers(db: Session = Depends(get_db)):
                     "name": layer.get("name"),
                     "href": layer.get("href")
                 }
-                
+
                 # Add metadata if available
                 if layer_name and layer_name in metadata_dict:
                     metadata = metadata_dict[layer_name]
                     enhanced_layer.update(_map_metadata_to_layer(metadata))
-                
-                # Add WMS tile URL for frontend rendering
-                if layer_name:
-                    try:
-                        tile_url = geo_service.get_tile_layer_url_cml(layer_name)
-                        enhanced_layer["wms_link"] = tile_url
-                    except Exception as e:
-                        logger.warning(f"Failed to get WMS link for layer {layer_name}: {str(e)}")
-                        enhanced_layer["wms_link"] = None
-                
+
+                    # Add WMS link
+                    if metadata.geoserver_name:
+                        wms_link = geo_service.get_tile_layer_url(metadata.geoserver_name)
+                        enhanced_layer["wms_link"] = wms_link
+
+                # Add styles if available (filter by both workspace and table name)
+                if layer_name and layer_name in layer_to_workspace_table:
+                    workspace_name, table_name = layer_to_workspace_table[layer_name]
+                    # Only match styles with the same workspace and table name
+                    key = (workspace_name, table_name)
+                    if key in styles_by_workspace_table:
+                        styles = styles_by_workspace_table[key]
+                        style_list = []
+                        for style in styles:
+                            # Get column data type
+                            col_type = style.data_type or "unknown"
+                            if style_dao:
+                                try:
+                                    col_type = style_dao.get_column_data_type(
+                                        style.layer_table_name,
+                                        style.color_by,
+                                        "public"
+                                    ) or col_type
+                                except Exception:
+                                    pass
+
+                            # Generate human-readable title
+                            style_title = _format_column_name(style.color_by)
+
+                            style_list.append({
+                                "styleName": (
+                                    style.generated_style_name or
+                                    f"{style.layer_table_name}_{style.color_by}_style"
+                                ),
+                                "styleTitle": style_title,
+                                "styleType": col_type,
+                                "styleId": style.id,
+                                "colorBy": style.color_by
+                            })
+                        enhanced_layer["styles"] = style_list
+                    else:
+                        enhanced_layer["styles"] = []
+                else:
+                    enhanced_layer["styles"] = []
+
                 enhanced_layers.append(enhanced_layer)
-            
-            # Return the enhanced response as a flat array
-            return enhanced_layers
+
+            # Return the enhanced response
+            return {
+                "layers": {
+                    "layer": enhanced_layers
+                }
+            }
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except HTTPException:
@@ -243,6 +335,7 @@ async def list_layers(db: Session = Depends(get_db)):
     except Exception as e:
         logger.error(f"Error in list_layers: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/layers/{layer}")
 async def get_layer_details(layer: str):
@@ -285,7 +378,8 @@ async def get_style_details(style: str):
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 # DELETE APIs
 @router.delete("/workspaces/{workspace}")
 async def delete_workspace(workspace: str):
@@ -328,7 +422,8 @@ async def delete_layer(layer: str):
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @router.delete("/styles/{style}")
 async def delete_style(style: str):
     """
@@ -342,7 +437,8 @@ async def delete_style(style: str):
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+
 @router.put("/workspaces/{workspace}")
 async def update_workspace(workspace: str, request: UpdateRequest):
     """
@@ -365,7 +461,12 @@ async def update_datastore(workspace: str, datastore: str, request: UpdateReques
     try:
         response = geo_service.update_datastore(workspace, datastore, request)
         if response.status_code == 200:
-            return {"message": f"Datastore '{datastore}' in workspace '{workspace}' updated successfully!"}
+            return {
+                "message": (
+                    f"Datastore '{datastore}' in workspace '{workspace}' "
+                    "updated successfully!"
+                )
+            }
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
     except Exception as e:
@@ -418,8 +519,9 @@ async def get_layer_tile_url(layer: str):
 @router.post("/layers/tile_urls")
 async def get_tile_urls_for_datasets(datasets: List[str]):
     """
-    Given dataset names (e.g., ["gbif", "kew_with_geom"]) return a map of dataset -> WMS tile URL.
-    This lets the frontend render point and distribution layers immediately.
+    Given dataset names (e.g., ["gbif", "kew_with_geom"]) return a map of
+    dataset -> WMS tile URL. This lets the frontend render point and
+    distribution layers immediately.
     """
     try:
         return geo_service.get_tile_urls_for_datasets(datasets)
@@ -496,13 +598,17 @@ async def create_layer_from_table(request: CreateLayerRequest):
     try:
         response = await geo_service.create_layer_from_table(request)
         if response.status_code in [200, 201]:
+            layer_name = request.layer_name or request.table_name
             return {
-                "message": f"Layer '{request.layer_name or request.table_name}' created successfully from table '{request.table_name}'!", 
+                "message": (
+                    f"Layer '{layer_name}' created successfully from "
+                    f"table '{request.table_name}'!"
+                ),
                 "status_code": response.status_code,
                 "workspace": request.workspace,
                 "store_name": request.store_name,
                 "table_name": request.table_name,
-                "layer_name": request.layer_name or request.table_name
+                "layer_name": layer_name
             }
         else:
             raise HTTPException(status_code=response.status_code, detail=response.text)
@@ -527,7 +633,7 @@ async def get_table_details(workspace: str, datastore: str, table: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-#################################### New simplified Layer APIs To Get column and data #################################
+# New simplified Layer APIs To Get column and data
 
 @router.get("/layer/columns")
 async def get_layer_columns(layer: str):
@@ -543,7 +649,13 @@ async def get_layer_columns(layer: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/layer/data")
-async def get_layer_data(layer: str, maxFeatures: int = 100, bbox: str = None, filter: str = None, properties: str = None):
+async def get_layer_data(
+    layer: str,
+    maxFeatures: int = 100,
+    bbox: str = None,
+    filter: str = None,
+    properties: str = None
+):
     """
     Return feature data for a layer via WFS with optional bbox/filter and maxFeatures.
     """
@@ -564,19 +676,6 @@ async def get_layer_data(layer: str, maxFeatures: int = 100, bbox: str = None, f
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/publish-upload-log")
-async def publish_upload_log(request: PublishUploadLogRequest, db: Session = Depends(get_db)):
-    """
-    Publish a stored upload log to GeoServer.
-    """
-    try:
-        response = await geo_service.publish_upload_log(request, db)
-        if response.status_code == 200:
-            return {"message": "Upload log published successfully!", "status_code": response.status_code}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/upload_logs/{log_id}/publish", response_model=PublishUploadLogResponse)
 async def publish_upload_log(
@@ -584,6 +683,9 @@ async def publish_upload_log(
     request: PublishUploadLogRequest,
     db: Session = Depends(get_db),
 ):
+    """
+    Publish a stored upload log to GeoServer.
+    """
     try:
         return geo_service.publish_upload_log(log_id, request, db)
     except FileNotFoundError as exc:
@@ -596,6 +698,3 @@ async def publish_upload_log(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-

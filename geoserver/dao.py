@@ -1,9 +1,8 @@
-from urllib.parse import urlencode
-import requests
 import os
 import tempfile
 import zipfile
-import shutil
+from urllib.parse import urlencode
+import requests
 
 
 class GeoServerDAO:
@@ -17,11 +16,11 @@ class GeoServerDAO:
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
-            
+
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{store_name}/file.shp"
         headers = {"Content-type": "application/zip"}
 
-        # Determine whether the provided path is a zip archive or a loose shapefile.
+        # Determine whether the provided path is a zip archive or a loose shapefile
         cleanup_path = None
         upload_path = file_path
 
@@ -45,7 +44,9 @@ class GeoServerDAO:
                     matching_files.append(filename)
                     available_extensions.add(ext.lower())
 
-            missing_components = [ext for ext in required_extensions if ext not in available_extensions]
+            missing_components = [
+                ext for ext in required_extensions if ext not in available_extensions
+            ]
             if missing_components:
                 missing_str = ', '.join(missing_components)
                 raise ValueError(
@@ -66,7 +67,10 @@ class GeoServerDAO:
                     os.remove(temp_zip_path)
                 raise
         else:
-            raise ValueError("Shapefile must be provided as a .zip archive or a .shp file with accompanying components.")
+            raise ValueError(
+                "Shapefile must be provided as a .zip archive or a .shp file "
+                "with accompanying components."
+            )
 
         try:
             with open(upload_path, "rb") as f:
@@ -82,22 +86,35 @@ class GeoServerDAO:
         """
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"File not found: {file_path}")
-            
+
         url = f"{self.base_url}/workspaces/{workspace}/styles"
         headers = {"Content-type": "application/vnd.ogc.sld+xml"}
         with open(file_path, "rb") as f:
             data = f.read()
-        response = requests.post(url, auth=self.auth, data=data, headers=headers, params={"name": style_name})
+        response = requests.post(
+            url, auth=self.auth, data=data, headers=headers, params={"name": style_name}
+        )
         return response
 
-    def upload_postgis(self, workspace: str, store_name: str, database: str, host: str, port: int, 
-                      username: str, password: str, schema: str = "public", description: str = None, enabled: bool = True):
+    def upload_postgis(
+        self,
+        workspace: str,
+        store_name: str,
+        database: str,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        schema: str = "public",
+        description: str = None,
+        enabled: bool = True
+    ):
         """
         Create a PostGIS datastore in GeoServer.
         """
         url = f"{self.base_url}/workspaces/{workspace}/datastores"
         headers = {"Content-type": "application/json"}
-        
+
         data_store_config = {
             "dataStore": {
                 "name": store_name,
@@ -119,13 +136,15 @@ class GeoServerDAO:
                 }
             }
         }
-        
+
         if description:
             data_store_config["dataStore"]["description"] = description
-            
-        response = requests.post(url, auth=self.auth, json=data_store_config, headers=headers)
+
+        response = requests.post(
+            url, auth=self.auth, json=data_store_config, headers=headers
+        )
         return response
-    
+
     def list_workspaces(self):
         url = f"{self.base_url}/workspaces.json"
         return requests.get(url, auth=self.auth)
@@ -149,7 +168,7 @@ class GeoServerDAO:
     def get_layer_details(self, layer: str):
         url = f"{self.base_url}/layers/{layer}.json"
         return requests.get(url, auth=self.auth)
-    
+
     def delete_workspace(self, workspace: str):
         """
         Delete a workspace.
@@ -170,14 +189,14 @@ class GeoServerDAO:
         """
         url = f"{self.base_url}/layers/{layer}"
         return requests.delete(url, auth=self.auth)
-    
+
     def delete_style(self, style: str):
         """
         Delete a style.
         """
         url = f"{self.base_url}/styles/{style}"
         return requests.delete(url, auth=self.auth)
-    
+
     def update_workspace(self, workspace: str, request):
         """
         Update a workspace.
@@ -209,7 +228,7 @@ class GeoServerDAO:
         url = f"{self.base_url}/styles/{style}"
         data = {"style": {"name": request.new_name}} if request.new_name else {}
         return requests.put(url, auth=self.auth, json=data)
-    
+
     def get_tile_layer_url(self, layer: str):
         """
         Construct a WMS URL for fetching the tile layer.
@@ -232,15 +251,19 @@ class GeoServerDAO:
 
     def get_tile_layer_url_cml(self, layer: str):
         """
-        Construct a WMS URL for fetching the tile layer in the format expected by the CML frontend.
-        Format: /wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&version=1.1.1&request=GetMap&srs=EPSG:3857&width=256&height=256&transparent=true&layers=biodiv:${layer_name}
+        Construct a WMS URL for fetching the tile layer in the format expected
+        by the CML frontend.
+        Format: /wms?bbox={bbox-epsg-3857}&format=image/png&service=WMS&
+        version=1.1.1&request=GetMap&srs=EPSG:3857&width=256&height=256&
+        transparent=true&layers=biodiv:${layer_name}
         """
-        # Extract layer name from workspace:layer format (e.g., "metastring:gbif" -> "gbif")
+        # Extract layer name from workspace:layer format
+        # (e.g., "metastring:gbif" -> "gbif")
         layer_name = layer.split(":")[-1] if ":" in layer else layer
-        
+
         # Prepend "biodiv:" prefix as expected by frontend
         layers_param = f"biodiv:{layer_name}"
-        
+
         # Construct relative WMS URL path (frontend will prepend the endpoint)
         params = {
             "bbox": "{bbox-epsg-3857}",  # Placeholder for frontend to replace
@@ -256,7 +279,14 @@ class GeoServerDAO:
         }
         return "/wms?" + urlencode(params)
 
-    def query_features(self, layer: str, bbox: str = None, filter_query: str = None, max_features: int = None, property_names: str = None):
+    def query_features(
+        self,
+        layer: str,
+        bbox: str = None,
+        filter_query: str = None,
+        max_features: int = None,
+        property_names: str = None
+    ):
         """
         Query features from a GeoServer WFS service.
         """
@@ -310,34 +340,40 @@ class GeoServerDAO:
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes.json"
         return requests.get(url, auth=self.auth)
 
-    def list_postgis_schema_tables(self, workspace: str, datastore: str, schema: str = "public"):
+    def list_postgis_schema_tables(
+        self, workspace: str, datastore: str, schema: str = "public"
+    ):
         """
         List all tables in a specific PostGIS schema by querying the database directly.
         This uses GeoServer's SQL view functionality to query the information_schema.
         """
         # First, get the datastore details to extract connection info
-        datastore_url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}.json"
+        datastore_url = (
+            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}.json"
+        )
         datastore_response = requests.get(datastore_url, auth=self.auth)
-        
+
         if datastore_response.status_code != 200:
             raise Exception(f"Failed to get datastore details: {datastore_response.text}")
-        
+
         # Use GeoServer's SQL view to query the database
-        sql_view_url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        sql_view_url = (
+            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        )
         headers = {"Content-type": "application/json"}
-        
+
         # SQL query to get all tables in the specified schema
         sql_query = f"""
-        SELECT 
+        SELECT
             table_name,
             table_type,
             table_schema
-        FROM information_schema.tables 
+        FROM information_schema.tables
         WHERE table_schema = '{schema}'
         AND table_type = 'BASE TABLE'
         ORDER BY table_name
         """
-        
+
         sql_view_config = {
             "featureType": {
                 "name": f"schema_tables_{schema}",
@@ -372,19 +408,27 @@ class GeoServerDAO:
                 }
             }
         }
-        
+
         # Create a temporary SQL view to query the database
-        response = requests.post(sql_view_url, auth=self.auth, json=sql_view_config, headers=headers)
-        
+        response = requests.post(
+            sql_view_url, auth=self.auth, json=sql_view_config, headers=headers
+        )
+
         if response.status_code in [200, 201]:
             # Now get the data from this SQL view
-            data_url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/schema_tables_{schema}.json"
+            data_url = (
+                f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
+                f"featuretypes/schema_tables_{schema}.json"
+            )
             data_response = requests.get(data_url, auth=self.auth)
-            
+
             # Clean up the temporary SQL view
-            delete_url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/schema_tables_{schema}"
+            delete_url = (
+                f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
+                f"featuretypes/schema_tables_{schema}"
+            )
             requests.delete(delete_url, auth=self.auth)
-            
+
             return data_response
         else:
             raise Exception(f"Failed to create SQL view: {response.text}")
@@ -407,27 +451,31 @@ class GeoServerDAO:
         response = requests.get(wfs_url, params=params, auth=self.auth)
         return response
 
-    def list_postgis_tables_direct(self, workspace: str, datastore: str, schema: str = "public"):
+    def list_postgis_tables_direct(
+        self, workspace: str, datastore: str, schema: str = "public"
+    ):
         """
         List all tables in a PostGIS schema by using GeoServer's SQL view endpoint.
         This method creates a temporary SQL view to query the information_schema.
         """
         # Create a SQL view to query the database schema
-        sql_view_url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        sql_view_url = (
+            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        )
         headers = {"Content-type": "application/json"}
-        
+
         # SQL query to get all tables in the specified schema
         sql_query = f"""
-        SELECT 
+        SELECT
             table_name,
             table_type,
             table_schema
-        FROM information_schema.tables 
+        FROM information_schema.tables
         WHERE table_schema = '{schema}'
         AND table_type = 'BASE TABLE'
         ORDER BY table_name
         """
-        
+
         sql_view_config = {
             "featureType": {
                 "name": f"temp_schema_tables_{schema}",
@@ -462,39 +510,56 @@ class GeoServerDAO:
                 }
             }
         }
-        
+
         # Create temporary SQL view
-        create_response = requests.post(sql_view_url, auth=self.auth, json=sql_view_config, headers=headers)
-        
+        create_response = requests.post(
+            sql_view_url, auth=self.auth, json=sql_view_config, headers=headers
+        )
+
         if create_response.status_code in [200, 201]:
             try:
                 # Get the data from the SQL view
-                data_url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/temp_schema_tables_{schema}.json"
+                data_url = (
+                    f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
+                    f"featuretypes/temp_schema_tables_{schema}.json"
+                )
                 data_response = requests.get(data_url, auth=self.auth)
-                
+
                 # Return the response with table information
                 return data_response
             finally:
                 # Clean up the temporary SQL view
-                delete_url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/temp_schema_tables_{schema}"
+                delete_url = (
+                    f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
+                    f"featuretypes/temp_schema_tables_{schema}"
+                )
                 requests.delete(delete_url, auth=self.auth)
         else:
             raise Exception(f"Failed to create SQL view: {create_response.text}")
 
-    def create_layer_from_table(self, workspace: str, datastore: str, table_name: str, 
-                               layer_name: str = None, title: str = None, 
-                               description: str = None, enabled: bool = True, 
-                               default_style: str = None):
+    def create_layer_from_table(
+        self,
+        workspace: str,
+        datastore: str,
+        table_name: str,
+        layer_name: str = None,
+        title: str = None,
+        description: str = None,
+        enabled: bool = True,
+        default_style: str = None
+    ):
         """
         Create a layer from a PostGIS table.
         """
-        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        url = (
+            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        )
         headers = {"Content-type": "application/json"}
-        
+
         # Use table_name as layer_name if not provided
         if not layer_name:
             layer_name = table_name
-            
+
         feature_type_config = {
             "featureType": {
                 "name": layer_name,
@@ -502,7 +567,7 @@ class GeoServerDAO:
                 "enabled": enabled
             }
         }
-        
+
         if title:
             feature_type_config["featureType"]["title"] = title
         if description:
@@ -511,15 +576,20 @@ class GeoServerDAO:
             feature_type_config["featureType"]["defaultStyle"] = {
                 "name": default_style
             }
-            
-        response = requests.post(url, auth=self.auth, json=feature_type_config, headers=headers)
+
+        response = requests.post(
+            url, auth=self.auth, json=feature_type_config, headers=headers
+        )
         return response
 
     def get_table_details(self, workspace: str, datastore: str, table_name: str):
         """
         Get details of a specific table in a datastore.
         """
-        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{table_name}.json"
+        url = (
+            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
+            f"featuretypes/{table_name}.json"
+        )
         return requests.get(url, auth=self.auth)
 
     def get_url(self, url: str):

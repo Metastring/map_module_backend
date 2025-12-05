@@ -8,6 +8,9 @@ from queries.api.api import SpatialQueryAPI1  # Import the original API for comp
 # Import metadata GraphQL API
 from metadata.api.api import metadata_app
 
+# Import styles API for layer styling
+from styles.api.api import router as styles_router
+
 # Allow CORS (if needed)
 from fastapi.middleware.cors import CORSMiddleware
 origins = ["*"]
@@ -25,6 +28,7 @@ app.include_router(geoserver_router, tags=["geoserver"])  # Add the GeoServer AP
 app.include_router(SpatialQueryAPI1.router, prefix=SpatialQueryAPI1.version, tags=["spatial-graphql-copy"])  # Add copy spatial queries GraphQL endpoint
 app.include_router(upload_log_router, prefix="/upload_log", tags=["upload-log"])
 app.include_router(metadata_app, prefix="/metadata", tags=["metadata-graphql"])  # Add metadata GraphQL endpoint
+app.include_router(styles_router, prefix="/styles", tags=["styles"]) 
 
 # Add health check endpoint for GraphQL service
 @app.get("/health")

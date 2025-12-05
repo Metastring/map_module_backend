@@ -1,7 +1,8 @@
-from pydantic import BaseModel, Field, validator
-from typing import Optional, List, Dict, Any
 import re
+from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, Field, validator
 from upload_log.models.model import UploadLogOut
+
 
 class UploadRequest(BaseModel):
     resource_type: str = Field(..., description="Type of resource (e.g., 'shapefile', 'style', 'dataset', 'postgis')")
@@ -20,8 +21,11 @@ class UploadRequest(BaseModel):
     @validator('workspace')
     def validate_workspace(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('workspace must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'workspace must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
+
 
 class PostGISRequest(BaseModel):
     workspace: str = Field(..., description="Target workspace in GeoServer")
@@ -38,20 +42,27 @@ class PostGISRequest(BaseModel):
     @validator('workspace')
     def validate_workspace(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('workspace must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'workspace must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
 
     @validator('store_name')
     def validate_store_name(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('store_name must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'store_name must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
 
     @validator('database')
     def validate_database(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('database must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'database must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
+
 
 class CreateLayerRequest(BaseModel):
     workspace: str = Field(..., description="Target workspace in GeoServer")
@@ -66,20 +77,27 @@ class CreateLayerRequest(BaseModel):
     @validator('workspace')
     def validate_workspace(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('workspace must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'workspace must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
 
     @validator('store_name')
     def validate_store_name(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('store_name must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'store_name must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
 
     @validator('table_name')
     def validate_table_name(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('table_name must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'table_name must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
+
 
 class CreateWorkspaceRequest(BaseModel):
     workspace_name: str = Field(..., description="Name of the workspace to create")
@@ -88,7 +106,9 @@ class CreateWorkspaceRequest(BaseModel):
     @validator('workspace_name')
     def validate_workspace_name(cls, v):
         if not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('workspace_name must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'workspace_name must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
 
 class UpdateRequest(BaseModel):
@@ -98,8 +118,11 @@ class UpdateRequest(BaseModel):
     @validator('new_name')
     def validate_new_name(cls, v):
         if v is not None and not re.match(r'^[a-zA-Z0-9_-]+$', v):
-            raise ValueError('new_name must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'new_name must contain only letters, numbers, underscores, and hyphens'
+            )
         return v
+
 
 class TableInfo(BaseModel):
     table_name: str = Field(..., description="Name of the table")
@@ -112,6 +135,7 @@ class SchemaTablesResponse(BaseModel):
     workspace: str = Field(..., description="Workspace name")
     datastore: str = Field(..., description="Datastore name")
 
+
 class PublishUploadLogRequest(BaseModel):
     workspace: str = Field(..., description="Target GeoServer workspace")
     store_name: Optional[str] = Field(None, description="Name of the datastore to create/use")
@@ -122,8 +146,11 @@ class PublishUploadLogRequest(BaseModel):
         if not value or not value.strip():
             raise ValueError('workspace must be provided')
         if not re.match(r'^[a-zA-Z0-9_-]+$', value):
-            raise ValueError('workspace must contain only letters, numbers, underscores, and hyphens')
+            raise ValueError(
+                'workspace must contain only letters, numbers, underscores, and hyphens'
+            )
         return value.strip()
+
 
 class PublishUploadLogResponse(BaseModel):
     message: str
