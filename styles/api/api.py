@@ -3,9 +3,11 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Any
 import logging
 from urllib.parse import quote
+import uuid
 from database.database import get_db
 from geoserver.dao import GeoServerDAO
 from utils.config import (geoserver_host, geoserver_port, geoserver_username, geoserver_password)
+from metadata.models.schema import Metadata
 from ..service.style_service import StyleService
 from ..models.model import (StyleMetadataOut, StyleGenerateRequest, StyleGenerateResponse, AuditLogOut)
 
@@ -148,13 +150,28 @@ async def get_legend(
 
 # ==================== Frontend Integration APIs ====================
 
-@router.get("/by-layer/{layer_name}")
+@router.get("/by-layer/{layer_id}")
 async def get_styles_by_layer(
-    layer_name: str,
+    layer_id: str,
     workspace: Optional[str] = Query(None, description="Workspace name (optional)"),
-    service: StyleService = Depends(get_style_service)
+    service: StyleService = Depends(get_style_service),
+    db: Session = Depends(get_db)
 ):
     try:
+        # Parse UUID from string
+        try:
+            layer_uuid = uuid.UUID(layer_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid layer ID format")
+        
+        # Query metadata by ID to get geoserver_name
+        metadata = db.query(Metadata).filter(Metadata.id == layer_uuid).first()
+        if not metadata:
+            raise HTTPException(status_code=404, detail="Layer not found")
+        
+        # Get layer name from metadata
+        layer_name = metadata.geoserver_name
+        
         # Extract workspace and table name from layer name (e.g., "metastring:gbif" -> workspace="metastring", table="gbif")
         table_name = layer_name
         extracted_workspace = None
@@ -226,8 +243,10 @@ async def get_styles_by_layer(
             "styles": style_list
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error getting styles for layer {layer_name}: {e}", exc_info=True)
+        logger.error(f"Error getting styles for layer ID {layer_id}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
