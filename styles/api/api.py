@@ -71,9 +71,9 @@ async def get_style_metadata(
 
 # ==================== Legend ====================
 
-@router.get("/legend/{style_id}")
+@router.get("/legend/{style_name}")
 async def get_legend(
-    style_id: int,
+    style_name: str,
     service: StyleService = Depends(get_style_service)
 ):
     """
@@ -81,7 +81,7 @@ async def get_legend(
     Returns complete MBStyle JSON with sources (TMS tiles) included.
     """
     try:
-        style = service.get_style_metadata(style_id)
+        style = service.get_style_metadata_by_name(style_name)
         if not style:
             raise HTTPException(status_code=404, detail="Style not found")
         
@@ -115,7 +115,7 @@ async def get_legend(
         }
         
         # Get style name for layers
-        style_name = style.generated_style_name or f"{style.layer_table_name}_{style.color_by}_style"
+        style_name_for_layers = style.generated_style_name or f"{style.layer_table_name}_{style.color_by}_style"
         
         # Update layers to use the source and ensure source-layer is set
         # Also transform match/step expressions to stops format for frontend
@@ -124,7 +124,7 @@ async def get_legend(
                 # Replace 'id' with 'styleName' and use the style name (remove any suffix like -circle, -fill, etc.)
                 if "id" in layer:
                     del layer["id"]
-                layer["styleName"] = style_name
+                layer["styleName"] = style_name_for_layers
                 
                 layer["source"] = source_name
                 layer["source-layer"] = style.layer_table_name
@@ -144,7 +144,7 @@ async def get_legend(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting legend for style {style_id}: {e}", exc_info=True)
+        logger.error(f"Error getting legend for style {style_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

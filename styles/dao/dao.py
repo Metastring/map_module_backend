@@ -286,6 +286,34 @@ class StyleDAO:
         """Get style metadata by ID."""
         return self.db.query(StyleMetadata).filter(StyleMetadata.id == style_id).first()
 
+    def get_style_by_name(self, style_name: str) -> Optional[StyleMetadata]:
+        """
+        Get style metadata by generated_style_name.
+        Also handles constructed format: {table_name}_{color_by}_style
+        """
+        # First try direct lookup by generated_style_name
+        style = self.db.query(StyleMetadata).filter(StyleMetadata.generated_style_name == style_name).first()
+        if style:
+            return style
+        
+        # If not found, try to parse the constructed format: {table_name}_{color_by}_style
+        # Extract table_name and color_by from style_name
+        if style_name.endswith("_style"):
+            # Remove "_style" suffix
+            base_name = style_name[:-6]  # Remove "_style"
+            # Try to find by matching the pattern
+            # Split by last underscore to get table_name and color_by
+            parts = base_name.rsplit("_", 1)
+            if len(parts) == 2:
+                table_name, color_by = parts
+                # Try to find style with matching table_name and color_by
+                # Note: This might match multiple styles, so we'll get the first one
+                style = self.db.query(StyleMetadata).filter(StyleMetadata.layer_table_name == table_name, StyleMetadata.color_by == color_by).first()
+                if style:
+                    return style
+        
+        return None
+
     def get_style_by_workspace_table_color(
         self, workspace: str, table_name: str, color_by: str
     ) -> Optional[StyleMetadata]:

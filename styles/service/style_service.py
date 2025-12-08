@@ -403,3 +403,7 @@ class StyleService:
     def get_style_metadata(self, style_id: int) -> Optional[StyleMetadata]:
         """Get style metadata by ID."""
         return self.dao.get_style_metadata(style_id)
+
+    def get_style_metadata_by_name(self, style_name: str) -> Optional[StyleMetadata]:
+        """Get style metadata by generated_style_name."""
+        return self.dao.get_style_by_name(style_name)
