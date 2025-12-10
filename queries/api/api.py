@@ -9,9 +9,9 @@ class SpatialQueryAPI1:
     router = APIRouter()
 
 # GraphQL Query Class
-@strawberry.type
+@strawberry.type(description="GraphQL queries for spatial data retrieval")
 class Query:
-    @strawberry.field
+    @strawberry.field(description="Query spatial data within a single polygon boundary. Returns data points and features that intersect with the provided polygon geometry from specified datasets.")
     def getPolygonData(self, input: SpatialQueryInput) -> SpatialQueryType:
         try:
             result = fetch_polygon_query(
@@ -24,7 +24,7 @@ class Query:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    @strawberry.field
+    @strawberry.field(description="Query spatial data within multiple polygon boundaries. Accepts an array of polygons and returns data points and features that intersect with any of the provided polygons from specified datasets. Useful for querying non-contiguous regions.")
     def getMultiPolygonData(self, input: SpatialQueryInput) -> SpatialQueryType:
         try:
             # Validate that at least one polygon is provided
@@ -43,7 +43,7 @@ class Query:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-    @strawberry.field
+    @strawberry.field(description="Search for spatial data by scientific name. Performs a case-insensitive partial match search across datasets and returns all matching records with their associated geographic data.")
     def getScientificNameMatches(self, input: ScientificNameInput) -> SpatialQueryType:
         try:
             result = fetch_scientific_name_matches(
@@ -56,4 +56,4 @@ class Query:
 # Create GraphQL schema and router
 schema = strawberry.Schema(query=Query)
 spatial_graphql_app = GraphQLRouter(schema)
-SpatialQueryAPI1.router.include_router(spatial_graphql_app, prefix="/graphql_data_method")
+SpatialQueryAPI1.router.include_router(spatial_graphql_app, prefix="/spatial_search")

@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# ############## local ###############
+############## local ###############
 # host = "localhost"
 # port = 5432
 # username = "postgres"
@@ -18,7 +18,7 @@ load_dotenv()
 # geoserver_username = "admin"
 # geoserver_password = "geoserver"
 
-####################### Staging Machine #########################
+###################### Staging Machine #########################
 host = os.getenv("DB_HOST", "localhost")
 port = int(os.getenv("DB_PORT", "5432"))
 username = os.getenv("DB_USERNAME", "")

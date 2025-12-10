@@ -13,7 +13,9 @@ from upload_log.models.schema import UploadLog as UploadLogTable
 from upload_log.dao.dao import UploadLogDAO
 from geoserver.model import PostGISRequest, CreateLayerRequest
 from geoserver.service import GeoServerService
-from utils.config import host, port, username, password, database
+from geoserver.admin.service import GeoServerAdminService
+from geoserver.admin.dao import GeoServerAdminDAO
+from utils.config import host, port, username, password, database, geoserver_host, geoserver_port, geoserver_username, geoserver_password
 
 logger = logging.getLogger(__name__)
 
@@ -235,7 +237,7 @@ class UploadLogService:
                     response = await geo_service.upload_postgis(postgis_request)
                     
                     if response.status_code in [200, 201]:
-                        # Create layer from table
+                        # Create layer from table using admin service
                         layer_request = CreateLayerRequest(
                             workspace=workspace,
                             store_name=final_store_name,
@@ -243,8 +245,16 @@ class UploadLogService:
                             layer_name=table_name
                         )
                         
+                        # Initialize admin service for layer creation
+                        admin_dao = GeoServerAdminDAO(
+                            base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
+                            username=geoserver_username,
+                            password=geoserver_password
+                        )
+                        admin_service = GeoServerAdminService(admin_dao)
+                        
                         logger.info(f"Creating layer '{table_name}' from table '{table_name}'")
-                        layer_response = await geo_service.create_layer_from_table(layer_request)
+                        layer_response = await admin_service.create_layer_from_table(layer_request)
                         
                         if layer_response.status_code in [200, 201]:
                             geoserver_message = f" Successfully uploaded to GeoServer workspace '{workspace}' as layer '{table_name}'."

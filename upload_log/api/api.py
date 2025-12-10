@@ -59,7 +59,7 @@ async def _persist_upload(file: UploadFile) -> Path:
     return destination
 
 
-@router.post("/upload",response_model=UploadLogOut, status_code=status.HTTP_200_OK,)
+@router.post("/upload", response_model=UploadLogOut, status_code=status.HTTP_200_OK, summary="Upload Shapefile and other spatial data files and log the upload  in the database and publish to GeoServer (Used for frontend api calls)", description="Upload a spatial data file (e.g., shapefile) to the system. This endpoint accepts spatial data uploads, extracts metadata automatically, stores the file, logs the upload in the database, and optionally publishes shapefiles to GeoServer.")
 async def upload_dataset(
     file: UploadFile = File(...),
     uploaded_by: str = Form(...),
@@ -173,7 +173,7 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
         ) from exc
 
 
-@router.get("/", response_model=List[UploadLogOut])
+@router.get("/", response_model=List[UploadLogOut], summary="List Upload Logs", description="Retrieve a list of upload logs with optional filtering. This endpoint allows you to query upload logs by various criteria such as layer name, file format, data type, CRS, source path, GeoServer layer, tags, uploaded by user, and upload date.")
 def list_upload_logs(
     db: Session = Depends(get_db),
     id: Optional[UUID] = Query(default=None),
@@ -211,7 +211,7 @@ def list_upload_logs(
     return UploadLogService.get_filtered(filter_payload, db)
 
 
-@router.get("/{log_id}", response_model=UploadLogOut)
+@router.get("/{log_id}", response_model=UploadLogOut, summary="Get Upload Log by ID", description="Retrieve detailed information about a specific upload log by its unique identifier. Returns complete upload log metadata including file details, spatial information, and GeoServer publication status.")
 def get_upload_log(log_id: UUID, db: Session = Depends(get_db)) -> UploadLogOut:
     record = UploadLogService.get_by_id(log_id, db)
     if not record:
@@ -221,7 +221,7 @@ def get_upload_log(log_id: UUID, db: Session = Depends(get_db)) -> UploadLogOut:
 
 ########################## Upload xlsx file ##########################
 
-@router.post("/create-table-and-insert1/")
+@router.post("/create-table-and-insert1/", summary="Upload XLSX and log the upload in the database and publish to GeoServer (Used for frontend api calls)", description="Upload an XLSX file and automatically create a PostGIS table with the data. This endpoint processes Excel files, creates a database table in the specified schema, inserts the data, publishes it to GeoServer as a layer, and optionally logs the upload if uploaded_by is provided.")
 async def create_table_and_insert1(
     table_name: str = Form(...),
     db_schema: str = Form(..., alias="schema"),

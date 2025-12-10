@@ -4,11 +4,11 @@ import logging
 from typing import List, Dict, Optional
 from urllib.parse import urlencode
 import requests
-from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
 from database.database import get_db
 from geoserver.dao import GeoServerDAO
-from geoserver.model import (CreateLayerRequest, PostGISRequest, PublishUploadLogRequest, PublishUploadLogResponse, UpdateRequest)
+from geoserver.model import (CreateLayerRequest, PostGISRequest, PublishUploadLogRequest, PublishUploadLogResponse)
 from geoserver.service import GeoServerService
 from metadata.models.schema import Metadata
 from metadata.service.service import MetadataService
@@ -21,7 +21,7 @@ from utils.config import *  # noqa: E402, F403
 logger = logging.getLogger(__name__)
 
 # Initialize router
-router = APIRouter()
+router = APIRouter(tags=["geoserver"])
 
 # Initialize DAO and Service with configuration
 geo_dao = GeoServerDAO(
@@ -31,16 +31,13 @@ geo_dao = GeoServerDAO(
 )
 geo_service = GeoServerService(geo_dao)
 
-@router.post("/upload")
+@router.post("/upload", summary="Upload Shapefile/Resource (Used for internal api calls)", description="Upload a shapefile or other resource to GeoServer. This API is used to upload shapefiles (as ZIP archives) to GeoServer. The shapefile must be in a ZIP format containing all required components (.shp, .shx, .dbf, etc.).")
 async def upload_resource(
-    workspace: str = Form(...),
-    store_name: str = Form(...),
-    resource_type: str = Form(...),
-    file: UploadFile = File(...)
+    workspace: str = Form(..., description="Target workspace name in GeoServer (e.g., 'metastring')"),
+    store_name: str = Form(..., description="Name of the datastore where the resource will be stored"),
+    resource_type: str = Form(..., description="Type of resource to upload (e.g., 'shapefile')"),
+    file: UploadFile = File(..., description="The file to upload (must be a ZIP file for shapefiles)")
 ):
-    """
-    Upload a resource (shapefile/style) to GeoServer from any device.
-    """
     try:
         response = await geo_service.upload_resource(workspace, store_name, resource_type, file)
         if response.status_code in [200, 201]:
@@ -51,11 +48,8 @@ async def upload_resource(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/upload-postgis")
+@router.post("/upload-postgis", summary="Create PostGIS Datastore (Used for internal api calls)", description="Create a PostGIS datastore connection in GeoServer. This API is used to connect GeoServer to a PostgreSQL/PostGIS database, allowing GeoServer to access spatial data stored in the database.")
 async def upload_postgis(request: PostGISRequest):
-    """
-    Upload PostGIS database connection to GeoServer.
-    """
     try:
         response = await geo_service.upload_postgis(request)
         if response.status_code in [200, 201]:
@@ -75,78 +69,6 @@ async def upload_postgis(request: PostGISRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/workspaces")
-async def list_workspaces():
-    """
-    List all workspaces in GeoServer.
-    """
-    try:
-        response = geo_service.list_workspaces()
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/workspaces")
-async def create_workspace(workspace_name: str):
-    """
-    Create a new workspace in GeoServer.
-    """
-    try:
-        response = geo_service.create_workspace(workspace_name)
-        if response.status_code in [200, 201]:
-            return {
-                "message": f"Workspace '{workspace_name}' created successfully!",
-                "status_code": response.status_code
-            }
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/workspaces/{workspace}")
-async def get_workspace_details(workspace: str):
-    """
-    Get details of a specific workspace.
-    """
-    try:
-        response = geo_service.get_workspace_details(workspace)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/workspaces/{workspace}/datastores")
-async def list_datastores(workspace: str):
-    """
-    List all datastores in a workspace.
-    """
-    try:
-        response = geo_service.list_datastores(workspace)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/workspaces/{workspace}/datastores/{datastore}")
-async def get_datastore_details(workspace: str, datastore: str):
-    """
-    Get details of a specific datastore.
-    """
-    try:
-        response = geo_service.get_datastore_details(workspace, datastore)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 def _map_metadata_to_layer(metadata: Metadata) -> Dict:
     """
@@ -188,12 +110,8 @@ def _format_column_name(column_name: str) -> str:
     return title
 
 
-@router.get("/layers")
+@router.get("/layers", summary="List All Layers (Used for frontend api calls)", description="Retrieve a list of all layers in GeoServer with their metadata and associated styles. This API returns enhanced layer information including metadata (if available) and style configurations for each layer.")
 async def list_layers(db: Session = Depends(get_db)):
-    """
-    List all layers in GeoServer with metadata if available.
-    Uses batch fetching to optimize database queries.
-    """
     try:
         response = geo_service.list_layers()
         if response.status_code == 200:
@@ -336,310 +254,28 @@ async def list_layers(db: Session = Depends(get_db)):
         logger.error(f"Error in list_layers: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
-
-@router.get("/layers/{layer}")
-async def get_layer_details(layer: str):
-    """
-    Get details of a specific layer.
-    """
-    try:
-        response = geo_service.get_layer_details(layer)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/styles")
-async def list_styles():
-    """
-    List all styles in GeoServer.
-    """
-    try:
-        response = geo_service.list_styles()
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/styles/{style}")
-async def get_style_details(style: str):
-    """
-    Get details of a specific style.
-    """
-    try:
-        response = geo_service.get_style_details(style)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# DELETE APIs
-@router.delete("/workspaces/{workspace}")
-async def delete_workspace(workspace: str):
-    """
-    Delete a specific workspace.
-    """
-    try:
-        response = geo_service.delete_workspace(workspace)
-        if response.status_code == 200:
-            return {"message": f"Workspace '{workspace}' deleted successfully!"}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.delete("/workspaces/{workspace}/datastores/{datastore}")
-async def delete_datastore(workspace: str, datastore: str):
-    """
-    Delete a specific datastore in a workspace.
-    """
-    try:
-        response = geo_service.delete_datastore(workspace, datastore)
-        if response.status_code == 200:
-            return {"message": f"Datastore '{datastore}' in workspace '{workspace}' deleted successfully!"}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.delete("/layers/{layer}")
-async def delete_layer(layer: str):
-    """
-    Delete a specific layer.
-    """
-    try:
-        response = geo_service.delete_layer(layer)
-        if response.status_code == 200:
-            return {"message": f"Layer '{layer}' deleted successfully!"}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/styles/{style}")
-async def delete_style(style: str):
-    """
-    Delete a specific style.
-    """
-    try:
-        response = geo_service.delete_style(style)
-        if response.status_code == 200:
-            return {"message": f"Style '{style}' deleted successfully!"}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/workspaces/{workspace}")
-async def update_workspace(workspace: str, request: UpdateRequest):
-    """
-    Update a specific workspace.
-    """
-    try:
-        response = geo_service.update_workspace(workspace, request)
-        if response.status_code == 200:
-            return {"message": f"Workspace '{workspace}' updated successfully!"}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.put("/workspaces/{workspace}/datastores/{datastore}")
-async def update_datastore(workspace: str, datastore: str, request: UpdateRequest):
-    """
-    Update a specific datastore in a workspace.
-    """
-    try:
-        response = geo_service.update_datastore(workspace, datastore, request)
-        if response.status_code == 200:
-            return {
-                "message": (
-                    f"Datastore '{datastore}' in workspace '{workspace}' "
-                    "updated successfully!"
-                )
-            }
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.put("/layers/{layer}")
-async def update_layer(layer: str, request: UpdateRequest):
-    """
-    Update a specific layer.
-    """
-    try:
-        response = geo_service.update_layer(layer, request)
-        if response.status_code == 200:
-            return {"message": f"Layer '{layer}' updated successfully!"}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.put("/styles/{style}")
-async def update_style(style: str, request: UpdateRequest):
-    """
-    Update a specific style.
-    """
-    try:
-        response = geo_service.update_style(style, request)
-        if response.status_code == 200:
-            return {"message": f"Style '{style}' updated successfully!"}
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    
-
-
-
 ####################################API to Get Tile Layer URL#############################
 
-@router.get("/layers/{layer}/tile_url")
+@router.get("/layers/{layer}/tile_url", summary="Get Layer Tile URL (Used for frontend api calls)", description="Generate a WMS (Web Map Service) tile URL for a specific layer. This URL can be used by frontend applications to render map tiles for the layer.")
 async def get_layer_tile_url(layer: str):
-    """
-    Get the GeoServer WMS tile layer URL for frontend rendering.
-    """
     try:
         tile_url = geo_service.get_tile_layer_url(layer)
         return {"tile_url": tile_url}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.post("/layers/tile_urls")
+@router.post("/layers/tile_urls", summary="Get Tile URLs for Multiple Datasets", description="Retrieve WMS tile URLs for multiple datasets at once. This endpoint accepts a list of dataset names and returns a mapping of dataset names to their corresponding WMS tile URLs, enabling efficient batch retrieval for frontend applications.")
 async def get_tile_urls_for_datasets(datasets: List[str]):
-    """
-    Given dataset names (e.g., ["gbif", "kew_with_geom"]) return a map of
-    dataset -> WMS tile URL. This lets the frontend render point and
-    distribution layers immediately.
-    """
     try:
         return geo_service.get_tile_urls_for_datasets(datasets)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/layers/{layer}/features")
-async def query_layer(layer: str, bbox: str = None, filter_query: str = None):
-    """
-    Fetch features from GeoServer based on query parameters.
-    """
-    try:
-        response = geo_service.query_layer_features(layer, bbox, filter_query)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/workspaces/{workspace}/datastores/{datastore}/tables")
-async def list_datastore_tables(workspace: str, datastore: str):
-    """
-    List all available tables in a PostGIS datastore.
-    """
-    try:
-        response = geo_service.list_datastore_tables(workspace, datastore)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+############################## New simplified Layer APIs To Get column and data ###########################
 
-@router.get("/workspaces/{workspace}/datastores/{datastore}/schema/{schema}/tables")
-async def list_postgis_schema_tables(workspace: str, datastore: str, schema: str):
-    """
-    List all tables in a specific PostGIS schema by querying the database directly.
-    """
-    try:
-        response = geo_service.list_postgis_schema_tables(workspace, datastore, schema)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/workspaces/{workspace}/datastores/{datastore}/tables-direct")
-async def list_postgis_tables_direct(workspace: str, datastore: str, schema: str = "public"):
-    """
-    List all tables in a PostGIS schema using direct database query.
-    """
-    try:
-        response = geo_service.list_postgis_tables_direct(workspace, datastore, schema)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/create-layer")
-async def create_layer_from_table(request: CreateLayerRequest):
-    """
-    Create a layer from a PostGIS table.
-    """
-    try:
-        response = await geo_service.create_layer_from_table(request)
-        if response.status_code in [200, 201]:
-            layer_name = request.layer_name or request.table_name
-            return {
-                "message": (
-                    f"Layer '{layer_name}' created successfully from "
-                    f"table '{request.table_name}'!"
-                ),
-                "status_code": response.status_code,
-                "workspace": request.workspace,
-                "store_name": request.store_name,
-                "table_name": request.table_name,
-                "layer_name": layer_name
-            }
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/workspaces/{workspace}/datastores/{datastore}/tables/{table}")
-async def get_table_details(workspace: str, datastore: str, table: str):
-    """
-    Get details of a specific table in a datastore.
-    """
-    try:
-        response = geo_service.get_table_details(workspace, datastore, table)
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise HTTPException(status_code=response.status_code, detail=response.text)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# New simplified Layer APIs To Get column and data
-
-@router.get("/layer/columns")
-async def get_layer_columns(layer: str):
-    """
-    Return a simplified schema (columns) for the given layer (e.g., ws:layer).
-    """
+@router.get("/layer/columns", summary="Get Layer Schema/Columns", description="Retrieve the schema (column definitions) for a specific layer. This endpoint returns information about all attributes/columns available in the layer, including data types and constraints.")
+async def get_layer_columns(layer: str = Query(..., description="Layer name (e.g., 'metastring:gbif')")):
     try:
         result = geo_service.get_layer_columns(layer)
         return result
@@ -648,16 +284,24 @@ async def get_layer_columns(layer: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/layer/data")
+@router.get("/layer/data", summary="Get Layer Feature Data", description="Retrieve actual feature data from a layer via WFS (Web Feature Service). This endpoint allows you to fetch geographic features with optional filtering, bounding box constraints, and property selection.")
 async def get_layer_data(
-    layer: str,
-    maxFeatures: int = 100,
-    bbox: str = None,
-    filter: str = None,
-    properties: str = None
+    layer: str = Query(..., description="Layer name (e.g., 'metastring:gbif')"),
+    maxFeatures: int = Query(100, description="Maximum number of features to return (default: 100)"),
+    bbox: str = Query(None, description="Bounding box filter in format 'minx,miny,maxx,maxy'"),
+    filter: str = Query(None, description="CQL filter expression for attribute-based filtering"),
+    properties: str = Query(None, description="Comma-separated list of property names to return (if not specified, all properties are returned)")
 ):
     """
     Return feature data for a layer via WFS with optional bbox/filter and maxFeatures.
+    
+    This endpoint retrieves actual feature data from a layer with the following options:
+    - **maxFeatures**: Limit the number of features returned (default: 100)
+    - **bbox**: Filter by bounding box (format: "minx,miny,maxx,maxy")
+    - **filter**: CQL filter for attribute-based filtering
+    - **properties**: Comma-separated list of property names to return (if not specified, all properties are returned)
+    
+    Returns features in GeoJSON format with geometry and attributes.
     """
     try:
         response = geo_service.get_layer_data(
@@ -677,7 +321,7 @@ async def get_layer_data(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/upload_logs/{log_id}/publish", response_model=PublishUploadLogResponse)
+@router.post("/upload_logs/{log_id}/publish (Used for internal api calls)", response_model=PublishUploadLogResponse, summary="Publish Upload Log to GeoServer", description="Publish a previously uploaded file (stored in upload logs) to GeoServer as a layer. This endpoint takes an upload log ID and publishes the associated file to the specified GeoServer workspace and datastore. It is used for internal api calls")
 async def publish_upload_log(
     log_id: int,
     request: PublishUploadLogRequest,
@@ -685,6 +329,11 @@ async def publish_upload_log(
 ):
     """
     Publish a stored upload log to GeoServer.
+    
+    This endpoint publishes a file that was previously uploaded and stored in the upload log
+    system. It creates a layer in GeoServer from the stored file, making it available for
+    mapping and visualization. The file must exist at the stored path and be a valid
+    spatial data format (e.g., shapefile).
     """
     try:
         return geo_service.publish_upload_log(log_id, request, db)

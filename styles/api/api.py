@@ -31,7 +31,7 @@ def get_style_service(db: Session = Depends(get_db)) -> StyleService:
 
 # ==================== Style Generation ====================
 
-@router.post("/generate", response_model=StyleGenerateResponse)
+@router.post("/generate", response_model=StyleGenerateResponse, summary="Generate Style for Layer", description="Generate a map style for a layer based on column data and classification method. This endpoint reads column information from PostGIS, computes color classes, builds MBStyle JSON, and optionally publishes to GeoServer and attaches it as the default style.")
 async def generate_style(
     request: StyleGenerateRequest,
     schema: str = Query("public", description="Database schema"),
@@ -57,7 +57,7 @@ async def generate_style(
 
 # ==================== Style Metadata ====================
 
-@router.get("/metadata/{style_id}", response_model=StyleMetadataOut)
+@router.get("/metadata/{style_id}", response_model=StyleMetadataOut, summary="Get Style Metadata by ID", description="Retrieve metadata information for a specific style by its ID. Returns style configuration details including layer information, color classification settings, and generation parameters.")
 async def get_style_metadata(
     style_id: int,
     service: StyleService = Depends(get_style_service)
@@ -71,7 +71,7 @@ async def get_style_metadata(
 
 # ==================== Legend ====================
 
-@router.get("/legend/{style_name}")
+@router.get("/legend/{style_name}", summary="Get Legend with TMS Sources", description="Retrieve a complete Mapbox GL style (MBStyle) JSON for a style, including TMS tile sources. This endpoint returns the full style definition with vector tile sources configured, ready for use in frontend mapping applications.")
 async def get_legend(
     style_name: str,
     service: StyleService = Depends(get_style_service)
@@ -150,7 +150,7 @@ async def get_legend(
 
 # ==================== Frontend Integration APIs ====================
 
-@router.get("/by-layer/{layer_id}")
+@router.get("/by-layer/{layer_id}", summary="Get Styles for Layer", description="Retrieve all active styles associated with a specific layer by layer ID. Returns style information along with layer metadata including title column, summary columns, and available style configurations for the layer.")
 async def get_styles_by_layer(
     layer_id: str,
     workspace: Optional[str] = Query(None, description="Workspace name (optional)"),
@@ -250,7 +250,7 @@ async def get_styles_by_layer(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/{style_id}/mbstyle")
+@router.get("/{style_id}/mbstyle", summary="Get MBStyle with Sources", description="Retrieve the complete Mapbox GL style JSON for a style ID with TMS tile sources included. This endpoint provides the full style definition configured with vector tile URLs, ready for integration with Mapbox GL or compatible mapping libraries.")
 async def get_mbstyle_with_sources(
     style_id: int,
     layer_name: Optional[str] = Query(None, description="Layer name for source (e.g., metastring:gbif)"),
@@ -308,7 +308,7 @@ async def get_mbstyle_with_sources(
 
 # ==================== Audit Logs ====================
 
-@router.get("/audit/{style_id}", response_model=List[AuditLogOut])
+@router.get("/audit/{style_id}", response_model=List[AuditLogOut], summary="Get Style Audit Logs", description="Retrieve audit logs for a specific style, showing the history of changes and operations performed on the style. Returns paginated results with timestamps and action details.")
 async def get_audit_logs(
     style_id: int,
     skip: int = Query(0, ge=0),
