@@ -131,6 +131,9 @@ class GeoServerService:
     def get_tile_layer_url(self, layer: str):
         return self.dao.get_tile_layer_url(layer)
 
+    def get_vectortile_layer_url(self, layer: str):
+        return self.dao.get_vectortile_layer_url(layer)
+
     def get_tile_layer_url_cml(self, layer: str):
         return self.dao.get_tile_layer_url_cml(layer)
 

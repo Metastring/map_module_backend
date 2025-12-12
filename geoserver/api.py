@@ -264,6 +264,14 @@ async def get_layer_tile_url(layer: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@router.get("/layers/{layer}/vector_tile_url", summary="Get Layer Vector Tile URL (Used for frontend api calls)", description="Generate a vector tile URL (TMS/PBF) for a specific layer. This URL template can be used by frontend applications to render vector map tiles. The URL contains placeholders {z}, {x}, {-y} that should be replaced with actual tile coordinates.")
+async def get_layer_vector_tile_url(layer: str):
+    try:
+        tile_url = geo_service.get_vectortile_layer_url(layer)
+        return {"tile_url": tile_url}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/layers/tile_urls", summary="Get Tile URLs for Multiple Datasets", description="Retrieve WMS tile URLs for multiple datasets at once. This endpoint accepts a list of dataset names and returns a mapping of dataset names to their corresponding WMS tile URLs, enabling efficient batch retrieval for frontend applications.")
 async def get_tile_urls_for_datasets(datasets: List[str]):
     try:

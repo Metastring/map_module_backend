@@ -255,3 +255,41 @@ class GeoServerDAO:
         """
         return requests.get(url, auth=self.auth)
 
+    def get_vectortile_layer_url(self, layer: str, epsg: int = 3857):
+        """
+        Construct a vector tile URL (TMS/PBF) for fetching the tile layer.
+        Format: /geoserver/gwc/service/tms/1.0.0/{layer}@{gridSet}@pbf/{z}/{x}/{-y}.pbf
+        
+        Args:
+            layer: Layer name (e.g., 'metastring:gbif' or 'kew')
+            epsg: EPSG code for projection (default: 3857 for Web Mercator)
+        
+        Returns:
+            Full vector tile URL template with placeholders for z, x, y
+        
+        Note: GeoWebCache uses gridset names (like 'WebMercatorQuad' for EPSG:3857)
+        instead of EPSG codes directly in the TMS URL.
+        """
+        # Get base URL without /rest
+        base_url = self.base_url.replace("/rest", "")
+        
+        # Map EPSG codes to GeoWebCache gridset names
+        # GeoWebCache uses 'WebMercatorQuad' for EPSG:3857 (Web Mercator)
+        gridset_mapping = {
+            3857: "WebMercatorQuad",
+            900913: "WebMercatorQuad",  # Google's alternate code for Web Mercator
+            4326: "EPSG:4326",  # EPSG:4326 is used directly
+        }
+        
+        # Get the gridset name, defaulting to EPSG:{code} format if not in mapping
+        gridset_name = gridset_mapping.get(epsg, f"EPSG:{epsg}")
+        
+        # Construct vector tile URL template
+        # Format: /gwc/service/tms/1.0.0/{layer}@{gridSet}@pbf/{z}/{x}/{-y}.pbf
+        # Note: {-y} is used for TMS Y coordinate inversion
+        # The layer name is used as-is in the path (GeoServer TMS handles : in layer names)
+        # base_url already contains /geoserver, so we only add /gwc/...
+        tile_url_template = f"{base_url}/gwc/service/tms/1.0.0/{layer}@{gridset_name}@pbf/{{z}}/{{x}}/{{-y}}.pbf"
+        
+        return tile_url_template
+
