@@ -153,11 +153,21 @@ class AuditLogOut(BaseModel):
 
 # ========== Style Generation API ==========
 
+class DataSource(str, Enum):
+    """Data source type for style generation."""
+    POSTGIS = "postgis"  # Data is in PostGIS database
+    GEOSERVER = "geoserver"  # Data is in GeoServer (shapefile or other source, not in DB)
+
+
 class StyleGenerateRequest(BaseModel):
 
-    layer_table_name: str = Field(..., description="PostGIS table name")
+    layer_table_name: str = Field(..., description="PostGIS table name or GeoServer layer name")
     workspace: str = Field(..., description="GeoServer workspace")
     color_by: str = Field(..., description="Column to classify by")
+    data_source: DataSource = Field(
+        DataSource.POSTGIS, 
+        description="Data source type: 'postgis' for database tables, 'geoserver' for shapefiles/layers not in DB"
+    )
 
     # Optional overrides
     layer_type: Optional[LayerType] = None

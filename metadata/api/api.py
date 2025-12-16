@@ -53,6 +53,9 @@ class Query:
                 return metadata
             else:
                 raise HTTPException(status_code=404, detail=f"No metadata found for geoserver_name {geoserver_name}")
+        except HTTPException:
+            # Re-raise HTTPException as-is
+            raise
         except Exception as e:
             logger.error(f"Error in get_metadata query: {str(e)}")
             raise HTTPException(status_code=500, detail="Internal Server Error")
@@ -64,9 +67,11 @@ class Query:
         logger.info(f"Fetching metadata with filters: {filters}")
         try:
             metadata_list = MetadataService.get_filtered(filters, db)
-            if not metadata_list:
-                raise HTTPException(status_code=404, detail="No metadata found for the given filters")
-            return metadata_list
+            # Return empty list if no records found (for "get all" queries)
+            return metadata_list if metadata_list else []
+        except HTTPException:
+            # Re-raise HTTPException as-is
+            raise
         except Exception as e:
             logger.error(f"Error in get_filtered query: {str(e)}")
             raise HTTPException(status_code=500, detail="Internal Server Error")

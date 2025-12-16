@@ -42,11 +42,11 @@ class MetadataService:
         try:
             logger.info(f"Fetching metadata with filters: {filters}")
             result = MetadataDAO.get_filtered(filters, db)
-            if result:
-                return result
-            else:
-                logger.error("No metadata found for the given filters.")
-                raise HTTPException(status_code=404, detail="No metadata found")
+            # Return empty list if no results found (don't raise 404 for "get all" queries)
+            return result if result else []
+        except HTTPException:
+            # Re-raise HTTPException as-is
+            raise
         except Exception as e:
             logger.error(f"Error in fetching filtered metadata: {str(e)}")
             raise HTTPException(status_code=500, detail="Internal Server Error")

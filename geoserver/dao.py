@@ -249,6 +249,74 @@ class GeoServerDAO:
         url = f"{self.base_url}/styles/{style_name}.json"
         return requests.get(url, auth=self.auth)
 
+    def create_mbstyle(self, workspace: str, style_name: str, style_content: str):
+        """
+        Create or update an MBStyle (Mapbox Style) in GeoServer.
+        
+        Args:
+            workspace: GeoServer workspace name
+            style_name: Name for the style
+            style_content: MBStyle JSON content as string
+        
+        Returns:
+            Response object from GeoServer REST API
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/styles"
+        headers = {"Content-type": "application/vnd.geoserver.mbstyle+json"}
+        
+        # First, try to create the style
+        response = requests.post(
+            url,
+            auth=self.auth,
+            data=style_content,
+            headers=headers,
+            params={"name": style_name}
+        )
+        
+        # If style already exists (409), update it instead
+        if response.status_code == 409:
+            update_url = f"{self.base_url}/workspaces/{workspace}/styles/{style_name}"
+            response = requests.put(
+                update_url,
+                auth=self.auth,
+                data=style_content,
+                headers=headers
+            )
+        
+        return response
+
+    def set_layer_default_style(self, workspace: str, layer_name: str, style_name: str):
+        """
+        Set the default style for a layer.
+        
+        Args:
+            workspace: GeoServer workspace name
+            layer_name: Layer name (without workspace prefix)
+            style_name: Style name to set as default
+        
+        Returns:
+            Response object from GeoServer REST API
+        """
+        url = f"{self.base_url}/layers/{workspace}:{layer_name}"
+        headers = {"Content-type": "application/json"}
+        
+        data = {
+            "layer": {
+                "defaultStyle": {
+                    "name": style_name
+                }
+            }
+        }
+        
+        response = requests.put(
+            url,
+            auth=self.auth,
+            json=data,
+            headers=headers
+        )
+        
+        return response
+
     def get_url(self, url: str):
         """
         Perform an authenticated GET to an absolute GeoServer REST URL.

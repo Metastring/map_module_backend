@@ -6,6 +6,7 @@ from urllib.parse import quote
 import uuid
 from database.database import get_db
 from geoserver.dao import GeoServerDAO
+from geoserver.service import GeoServerService
 from utils.config import (geoserver_host, geoserver_port, geoserver_username, geoserver_password)
 from metadata.models.schema import Metadata
 from ..service.style_service import StyleService
@@ -16,22 +17,23 @@ logger = logging.getLogger(__name__)
 # Note: prefix is added in main.py when including the router
 router = APIRouter(tags=["styles"])
 
-# Initialize GeoServer DAO
+# Initialize GeoServer DAO and Service
 geoserver_dao = GeoServerDAO(
     base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
     username=geoserver_username,
     password=geoserver_password
 )
+geoserver_service = GeoServerService(geoserver_dao)
 
 
 def get_style_service(db: Session = Depends(get_db)) -> StyleService:
     """Dependency to get StyleService instance."""
-    return StyleService(db, geoserver_dao)
+    return StyleService(db, geoserver_dao, geoserver_service)
 
 
 # ==================== Style Generation ====================
 
-@router.post("/generate", response_model=StyleGenerateResponse, summary="Generate Style for Layer", description="Generate a map style for a layer based on column data and classification method. This endpoint reads column information from PostGIS, computes color classes, builds MBStyle JSON, and optionally publishes to GeoServer and attaches it as the default style.")
+@router.post("/generate", response_model=StyleGenerateResponse, summary="Generate Style for Layer", description="Generate a map style for a layer based on column data and classification method. This endpoint supports both PostGIS database tables and GeoServer layers (including shapefiles). It reads column information from the data source, computes color classes, builds MBStyle JSON, and optionally publishes to GeoServer and attaches it as the default style.")
 async def generate_style(
     request: StyleGenerateRequest,
     schema: str = Query("public", description="Database schema"),
@@ -41,11 +43,15 @@ async def generate_style(
     Generate a style for a layer.
     
     This endpoint performs the complete style generation pipeline:
-    1. Reads column information from PostGIS
+    1. Reads column information from PostGIS or GeoServer (based on data_source)
     2. Computes color classes based on classification method
     3. Builds MBStyle JSON
     4. Optionally publishes to GeoServer
     5. Optionally attaches to layer as default style
+    
+    Supports two data sources:
+    - 'postgis': For layers stored in PostGIS database (default)
+    - 'geoserver': For shapefiles and other layers in GeoServer that are not in the database
     """
     result = service.generate_style(request, schema)
     

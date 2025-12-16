@@ -21,10 +21,12 @@ logger = logging.getLogger(__name__)
 class StyleDAO:
     """
     Data Access Object for style metadata and PostGIS column queries.
+    Supports both PostGIS database tables and GeoServer layers.
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, geoserver_service=None):
         self.db = db
+        self.geoserver_service = geoserver_service
 
     # ==================== Column Information ====================
 
@@ -82,6 +84,22 @@ class StyleDAO:
         }).fetchone()
         return result[0] if result else None
 
+    def column_exists(self, table_name: str, column_name: str, schema: str = "public") -> bool:
+        """Check if a column exists in a table."""
+        query = text("""
+            SELECT COUNT(*)
+            FROM information_schema.columns
+            WHERE table_name = :table_name
+              AND column_name = :column_name
+              AND table_schema = :schema
+        """)
+        result = self.db.execute(query, {
+            "table_name": table_name,
+            "column_name": column_name,
+            "schema": schema
+        }).scalar()
+        return result > 0
+
     # ==================== Numeric Statistics ====================
 
     def get_numeric_stats(
@@ -99,6 +117,12 @@ class StyleDAO:
         self._validate_identifier(table_name)
         self._validate_identifier(column_name)
         
+        # Verify column exists
+        if not self.column_exists(table_name, column_name, schema):
+            raise ValueError(
+                f"Column '{column_name}' does not exist in table '{schema}.{table_name}'"
+            )
+        
         query = text(f"""
             SELECT 
                 MIN("{column_name}")::float as min_val,
@@ -108,10 +132,16 @@ class StyleDAO:
             WHERE "{column_name}" IS NOT NULL
         """)
         
-        result = self.db.execute(query).fetchone()
-        if result:
-            return result[0], result[1], result[2]
-        return None, None, 0
+        try:
+            result = self.db.execute(query).fetchone()
+            if result:
+                return result[0], result[1], result[2]
+            return None, None, 0
+        except Exception as e:
+            logger.error(f"Error getting numeric stats for {schema}.{table_name}.{column_name}: {e}")
+            raise ValueError(
+                f"Failed to query column '{column_name}' from table '{schema}.{table_name}': {str(e)}"
+            ) from e
 
     def get_quantile_breaks(
         self, 
@@ -126,6 +156,12 @@ class StyleDAO:
         self._validate_identifier(table_name)
         self._validate_identifier(column_name)
         
+        # Verify column exists
+        if not self.column_exists(table_name, column_name, schema):
+            raise ValueError(
+                f"Column '{column_name}' does not exist in table '{schema}.{table_name}'"
+            )
+        
         # Generate percentile values
         percentiles = [i / num_classes for i in range(1, num_classes)]
         percentile_str = ", ".join([str(p) for p in percentiles])
@@ -137,10 +173,16 @@ class StyleDAO:
             WHERE "{column_name}" IS NOT NULL
         """)
         
-        result = self.db.execute(query).fetchone()
-        if result and result[0]:
-            return list(result[0])
-        return []
+        try:
+            result = self.db.execute(query).fetchone()
+            if result and result[0]:
+                return list(result[0])
+            return []
+        except Exception as e:
+            logger.error(f"Error getting quantile breaks for {schema}.{table_name}.{column_name}: {e}")
+            raise ValueError(
+                f"Failed to query column '{column_name}' from table '{schema}.{table_name}': {str(e)}"
+            ) from e
 
     def get_all_values_for_jenks(
         self, 
@@ -156,33 +198,45 @@ class StyleDAO:
         self._validate_identifier(table_name)
         self._validate_identifier(column_name)
         
-        # First get count
-        count_query = text(f"""
-            SELECT COUNT(*) FROM "{schema}"."{table_name}" 
-            WHERE "{column_name}" IS NOT NULL
-        """)
-        count = self.db.execute(count_query).scalar()
+        # Verify column exists
+        if not self.column_exists(table_name, column_name, schema):
+            raise ValueError(
+                f"Column '{column_name}' does not exist in table '{schema}.{table_name}'"
+            )
         
-        if count <= sample_size:
-            # Get all values
-            query = text(f"""
-                SELECT "{column_name}"::float
-                FROM "{schema}"."{table_name}"
+        try:
+            # First get count
+            count_query = text(f"""
+                SELECT COUNT(*) FROM "{schema}"."{table_name}" 
                 WHERE "{column_name}" IS NOT NULL
-                ORDER BY "{column_name}"
             """)
-        else:
-            # Sample values
-            query = text(f"""
-                SELECT "{column_name}"::float
-                FROM "{schema}"."{table_name}"
-                WHERE "{column_name}" IS NOT NULL
-                ORDER BY RANDOM()
-                LIMIT {sample_size}
-            """)
-        
-        result = self.db.execute(query)
-        return [row[0] for row in result if row[0] is not None]
+            count = self.db.execute(count_query).scalar()
+            
+            if count <= sample_size:
+                # Get all values
+                query = text(f"""
+                    SELECT "{column_name}"::float
+                    FROM "{schema}"."{table_name}"
+                    WHERE "{column_name}" IS NOT NULL
+                    ORDER BY "{column_name}"
+                """)
+            else:
+                # Sample values
+                query = text(f"""
+                    SELECT "{column_name}"::float
+                    FROM "{schema}"."{table_name}"
+                    WHERE "{column_name}" IS NOT NULL
+                    ORDER BY RANDOM()
+                    LIMIT {sample_size}
+                """)
+            
+            result = self.db.execute(query)
+            return [row[0] for row in result if row[0] is not None]
+        except Exception as e:
+            logger.error(f"Error getting values for Jenks for {schema}.{table_name}.{column_name}: {e}")
+            raise ValueError(
+                f"Failed to query column '{column_name}' from table '{schema}.{table_name}': {str(e)}"
+            ) from e
 
     # ==================== Categorical Values ====================
 
@@ -199,6 +253,12 @@ class StyleDAO:
         self._validate_identifier(table_name)
         self._validate_identifier(column_name)
         
+        # First verify the column exists
+        if not self.column_exists(table_name, column_name, schema):
+            raise ValueError(
+                f"Column '{column_name}' does not exist in table '{schema}.{table_name}'"
+            )
+        
         query = text(f"""
             SELECT DISTINCT "{column_name}"::text as val
             FROM "{schema}"."{table_name}"
@@ -207,8 +267,15 @@ class StyleDAO:
             LIMIT {limit}
         """)
         
-        result = self.db.execute(query)
-        return [row[0] for row in result if row[0]]
+        try:
+            result = self.db.execute(query)
+            return [row[0] for row in result if row[0]]
+        except Exception as e:
+            logger.error(f"Error getting distinct values for {schema}.{table_name}.{column_name}: {e}")
+            # Re-raise with more context
+            raise ValueError(
+                f"Failed to query column '{column_name}' from table '{schema}.{table_name}': {str(e)}"
+            ) from e
 
     # ==================== Table Information ====================
 
@@ -479,6 +546,276 @@ class StyleDAO:
         self.db.commit()
         self.db.refresh(cache)
         return cache
+
+    # ==================== Helpers ====================
+
+    # ==================== GeoServer Layer Support ====================
+
+    def get_column_info_geoserver(self, layer_name: str) -> List[ColumnInfo]:
+        """
+        Get column information from GeoServer layer (for shapefiles not in DB).
+        Returns column names, data types, and whether they're numeric/categorical.
+        """
+        if not self.geoserver_service:
+            raise ValueError("GeoServerService not available")
+        
+        try:
+            result = self.geoserver_service.get_layer_columns(layer_name)
+            columns_data = result.get("columns", [])
+            
+            columns = []
+            for col in columns_data:
+                col_name = col.get("name", "")
+                # Skip geometry columns
+                if col_name.lower() in ['geom', 'geometry', 'the_geom']:
+                    continue
+                
+                col_type = col.get("type", "")
+                is_nillable = col.get("nillable", True)
+                
+                # Map Java types to PostgreSQL types for consistency
+                type_mapping = {
+                    "java.lang.Integer": "integer",
+                    "java.lang.Long": "bigint",
+                    "java.lang.Short": "smallint",
+                    "java.lang.Double": "double precision",
+                    "java.lang.Float": "real",
+                    "java.math.BigDecimal": "numeric",
+                    "java.lang.String": "character varying",
+                    "java.lang.Boolean": "boolean",
+                }
+                mapped_type = type_mapping.get(col_type, col_type.lower())
+                
+                is_numeric = mapped_type in [
+                    'integer', 'bigint', 'smallint', 'numeric', 
+                    'real', 'double precision', 'decimal'
+                ]
+                is_categorical = mapped_type in [
+                    'character varying', 'varchar', 'text', 'char'
+                ]
+                
+                columns.append(ColumnInfo(
+                    column_name=col_name,
+                    data_type=mapped_type,
+                    is_nullable=is_nillable,
+                    is_numeric=is_numeric,
+                    is_categorical=is_categorical
+                ))
+            
+            return columns
+        except Exception as e:
+            logger.error(f"Error getting column info from GeoServer for layer {layer_name}: {e}")
+            raise ValueError(f"Failed to get column information from GeoServer layer '{layer_name}': {str(e)}") from e
+
+    def get_column_data_type_geoserver(self, layer_name: str, column_name: str) -> Optional[str]:
+        """Get the data type of a specific column from GeoServer layer."""
+        columns = self.get_column_info_geoserver(layer_name)
+        for col in columns:
+            if col.column_name == column_name:
+                return col.data_type
+        return None
+
+    def get_numeric_stats_geoserver(
+        self, 
+        layer_name: str, 
+        column_name: str,
+        sample_size: int = 10000
+    ) -> Tuple[Optional[float], Optional[float], int]:
+        """
+        Get min, max, and count for a numeric column from GeoServer layer via WFS.
+        Returns (min_value, max_value, count).
+        Uses sampling for large datasets.
+        """
+        if not self.geoserver_service:
+            raise ValueError("GeoServerService not available")
+        
+        try:
+            # First, get a sample of data to compute statistics
+            response = self.geoserver_service.get_layer_data(
+                layer=layer_name,
+                max_features=sample_size,
+                properties=column_name
+            )
+            
+            if response.status_code != 200:
+                raise ValueError(f"WFS query failed: {response.text}")
+            
+            data = response.json()
+            features = data.get("features", [])
+            
+            if not features:
+                return None, None, 0
+            
+            values = []
+            for feature in features:
+                props = feature.get("properties", {})
+                val = props.get(column_name)
+                if val is not None:
+                    try:
+                        values.append(float(val))
+                    except (ValueError, TypeError):
+                        continue
+            
+            if not values:
+                return None, None, 0
+            
+            min_val = min(values)
+            max_val = max(values)
+            count = len(values)
+            
+            return min_val, max_val, count
+            
+        except Exception as e:
+            logger.error(f"Error getting numeric stats from GeoServer for {layer_name}.{column_name}: {e}")
+            raise ValueError(
+                f"Failed to query column '{column_name}' from GeoServer layer '{layer_name}': {str(e)}"
+            ) from e
+
+    def get_distinct_values_geoserver(
+        self, 
+        layer_name: str, 
+        column_name: str,
+        limit: int = 100,
+        sample_size: int = 10000
+    ) -> List[str]:
+        """
+        Get distinct values for a categorical column from GeoServer layer via WFS.
+        """
+        if not self.geoserver_service:
+            raise ValueError("GeoServerService not available")
+        
+        try:
+            # Get sample of data
+            response = self.geoserver_service.get_layer_data(
+                layer=layer_name,
+                max_features=sample_size,
+                properties=column_name
+            )
+            
+            if response.status_code != 200:
+                raise ValueError(f"WFS query failed: {response.text}")
+            
+            data = response.json()
+            features = data.get("features", [])
+            
+            distinct_values = set()
+            for feature in features:
+                props = feature.get("properties", {})
+                val = props.get(column_name)
+                if val is not None:
+                    distinct_values.add(str(val))
+            
+            # Sort and limit
+            result = sorted(list(distinct_values))[:limit]
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error getting distinct values from GeoServer for {layer_name}.{column_name}: {e}")
+            raise ValueError(
+                f"Failed to query column '{column_name}' from GeoServer layer '{layer_name}': {str(e)}"
+            ) from e
+
+    def get_all_values_for_jenks_geoserver(
+        self, 
+        layer_name: str, 
+        column_name: str, 
+        sample_size: int = 10000
+    ) -> List[float]:
+        """
+        Get all values for Jenks natural breaks calculation from GeoServer layer.
+        Uses sampling for large datasets.
+        """
+        if not self.geoserver_service:
+            raise ValueError("GeoServerService not available")
+        
+        try:
+            response = self.geoserver_service.get_layer_data(
+                layer=layer_name,
+                max_features=sample_size,
+                properties=column_name
+            )
+            
+            if response.status_code != 200:
+                raise ValueError(f"WFS query failed: {response.text}")
+            
+            data = response.json()
+            features = data.get("features", [])
+            
+            values = []
+            for feature in features:
+                props = feature.get("properties", {})
+                val = props.get(column_name)
+                if val is not None:
+                    try:
+                        values.append(float(val))
+                    except (ValueError, TypeError):
+                        continue
+            
+            # Sort for Jenks
+            values.sort()
+            return values
+            
+        except Exception as e:
+            logger.error(f"Error getting values for Jenks from GeoServer for {layer_name}.{column_name}: {e}")
+            raise ValueError(
+                f"Failed to query column '{column_name}' from GeoServer layer '{layer_name}': {str(e)}"
+            ) from e
+
+    def get_quantile_breaks_geoserver(
+        self, 
+        layer_name: str, 
+        column_name: str, 
+        num_classes: int,
+        sample_size: int = 10000
+    ) -> List[float]:
+        """
+        Get quantile breaks for a numeric column from GeoServer layer.
+        Since we can't use SQL percentile_cont, we compute quantiles from sampled data.
+        """
+        values = self.get_all_values_for_jenks_geoserver(layer_name, column_name, sample_size)
+        
+        if not values:
+            return []
+        
+        # Compute quantiles manually
+        percentiles = [i / num_classes for i in range(1, num_classes)]
+        breaks = []
+        for p in percentiles:
+            idx = int(p * len(values))
+            if idx >= len(values):
+                idx = len(values) - 1
+            breaks.append(values[idx])
+        
+        return breaks
+
+    def get_geometry_type_geoserver(self, layer_name: str) -> Optional[str]:
+        """Get the geometry type of a GeoServer layer."""
+        if not self.geoserver_service:
+            raise ValueError("GeoServerService not available")
+        
+        try:
+            result = self.geoserver_service.get_layer_columns(layer_name)
+            columns_data = result.get("columns", [])
+            
+            # Look for geometry column
+            for col in columns_data:
+                col_type = col.get("type", "")
+                col_name = col.get("name", "").lower()
+                if "geometry" in col_type.lower() or col_name in ['geom', 'geometry', 'the_geom']:
+                    # Try to extract geometry type from binding
+                    binding = col.get("binding", "")
+                    if "Point" in binding:
+                        return "point"
+                    elif "LineString" in binding or "MultiLineString" in binding:
+                        return "line"
+                    elif "Polygon" in binding or "MultiPolygon" in binding:
+                        return "polygon"
+            
+            # Default to polygon if we can't determine
+            return "polygon"
+        except Exception as e:
+            logger.error(f"Error getting geometry type from GeoServer for layer {layer_name}: {e}")
+            return "polygon"  # Default fallback
 
     # ==================== Helpers ====================
 

@@ -18,6 +18,7 @@ from ..models.model import (
     LayerType,
     ClassificationResult,
     MBStyleOutput,
+    DataSource,
 )
 from ..models.schema import StyleMetadata
 from .classification import ClassificationService
@@ -34,16 +35,18 @@ class StyleService:
     Metadata → DB Queries → Classification → MBStyle JSON → Publish → Attach
     """
 
-    def __init__(self, db: Session, geoserver_dao=None):
+    def __init__(self, db: Session, geoserver_dao=None, geoserver_service=None):
         """
         Initialize the style service.
         
         Args:
             db: SQLAlchemy database session
             geoserver_dao: GeoServerDAO instance for publishing styles
+            geoserver_service: GeoServerService instance for querying GeoServer layers
         """
         self.db = db
-        self.dao = StyleDAO(db)
+        self.geoserver_service = geoserver_service
+        self.dao = StyleDAO(db, geoserver_service=geoserver_service)
         self.classification_service = ClassificationService()
         self.mbstyle_builder = MBStyleBuilder()
         self.geoserver_dao = geoserver_dao
@@ -100,18 +103,43 @@ class StyleService:
             # Step 2: Get layer type from geometry if not specified
             layer_type = request.layer_type
             if not layer_type:
-                detected_type = self.dao.get_geometry_type(request.layer_table_name, schema)
+                if request.data_source == DataSource.POSTGIS:
+                    detected_type = self.dao.get_geometry_type(request.layer_table_name, schema)
+                else:
+                    # For GeoServer, construct full layer name (workspace:layer)
+                    layer_name = f"{request.workspace}:{request.layer_table_name}"
+                    detected_type = self.dao.get_geometry_type_geoserver(layer_name)
+                
                 if detected_type:
                     layer_type = LayerType(detected_type)
                 else:
                     layer_type = LayerType.POLYGON
             
-            # Step 3: Query database for column statistics
-            column_data_type = self.dao.get_column_data_type(
-                request.layer_table_name, 
-                request.color_by, 
-                schema
-            )
+            # Step 3: Query for column statistics (from DB or GeoServer)
+            if request.data_source == DataSource.POSTGIS:
+                column_data_type = self.dao.get_column_data_type(
+                    request.layer_table_name, 
+                    request.color_by, 
+                    schema
+                )
+                
+                # Validate that the column exists
+                if column_data_type is None:
+                    raise ValueError(
+                        f"Column '{request.color_by}' does not exist in table '{schema}.{request.layer_table_name}'. "
+                        f"Please verify the column name and try again."
+                    )
+            else:
+                # GeoServer source
+                layer_name = f"{request.workspace}:{request.layer_table_name}"
+                column_data_type = self.dao.get_column_data_type_geoserver(layer_name, request.color_by)
+                
+                # Validate that the column exists
+                if column_data_type is None:
+                    raise ValueError(
+                        f"Column '{request.color_by}' does not exist in GeoServer layer '{layer_name}'. "
+                        f"Please verify the column name and try again."
+                    )
             
             is_numeric = column_data_type in [
                 'integer', 'bigint', 'smallint', 'numeric', 
@@ -136,7 +164,9 @@ class StyleService:
                     palette,
                     custom_colors,
                     request.manual_breaks,
-                    schema
+                    schema,
+                    request.data_source,
+                    request.workspace
                 )
                 data_type = "numeric"
                 distinct_values = None
@@ -147,7 +177,9 @@ class StyleService:
                     request.color_by,
                     palette,
                     custom_colors,
-                    schema
+                    schema,
+                    request.data_source,
+                    request.workspace
                 )
                 data_type = "categorical"
                 distinct_values = classification.categories
@@ -228,16 +260,30 @@ class StyleService:
         except Exception as e:
             logger.error(f"Style generation failed: {e}", exc_info=True)
             
-            # Log failure
+            # Rollback any failed transaction before attempting audit log
+            try:
+                self.db.rollback()
+            except Exception:
+                pass  # Ignore rollback errors
+            
+            # Log failure (in a new transaction)
             if style_metadata:
-                self.dao.create_audit_log(
-                    style_metadata_id=style_metadata.id,
-                    action="generation_failed",
-                    user_id=request.user_id,
-                    user_email=request.user_email,
-                    status="failed",
-                    error_message=str(e)
-                )
+                try:
+                    self.dao.create_audit_log(
+                        style_metadata_id=style_metadata.id,
+                        action="generation_failed",
+                        user_id=request.user_id,
+                        user_email=request.user_email,
+                        status="failed",
+                        error_message=str(e)
+                    )
+                except Exception as audit_error:
+                    logger.error(f"Failed to create audit log: {audit_error}", exc_info=True)
+                    # Rollback again if audit log fails
+                    try:
+                        self.db.rollback()
+                    except Exception:
+                        pass
             
             return StyleGenerateResponse(
                 success=False,
@@ -254,7 +300,9 @@ class StyleService:
         palette: str,
         custom_colors: Optional[List[str]],
         manual_breaks: Optional[List[float]],
-        schema: str
+        schema: str,
+        data_source: DataSource = DataSource.POSTGIS,
+        workspace: str = None
     ) -> ClassificationResult:
         """Classify numeric column."""
         # Check cache first
@@ -264,23 +312,42 @@ class StyleService:
         if cached:
             return ClassificationResult(**cached)
         
-        # Get min/max
-        min_val, max_val, count = self.dao.get_numeric_stats(
-            table_name, column_name, schema
-        )
+        # Get min/max based on data source
+        if data_source == DataSource.POSTGIS:
+            min_val, max_val, count = self.dao.get_numeric_stats(
+                table_name, column_name, schema
+            )
+        else:
+            # GeoServer source
+            layer_name = f"{workspace}:{table_name}"
+            min_val, max_val, count = self.dao.get_numeric_stats_geoserver(
+                layer_name, column_name
+            )
         
         # Get additional data based on method
         values = None
         quantile_breaks = None
         
         if method == ClassificationMethod.QUANTILE:
-            quantile_breaks = self.dao.get_quantile_breaks(
-                table_name, column_name, num_classes, schema
-            )
+            if data_source == DataSource.POSTGIS:
+                quantile_breaks = self.dao.get_quantile_breaks(
+                    table_name, column_name, num_classes, schema
+                )
+            else:
+                layer_name = f"{workspace}:{table_name}"
+                quantile_breaks = self.dao.get_quantile_breaks_geoserver(
+                    layer_name, column_name, num_classes
+                )
         elif method == ClassificationMethod.JENKS:
-            values = self.dao.get_all_values_for_jenks(
-                table_name, column_name, schema
-            )
+            if data_source == DataSource.POSTGIS:
+                values = self.dao.get_all_values_for_jenks(
+                    table_name, column_name, schema
+                )
+            else:
+                layer_name = f"{workspace}:{table_name}"
+                values = self.dao.get_all_values_for_jenks_geoserver(
+                    layer_name, column_name
+                )
         
         # Compute classification
         result = self.classification_service.classify(
@@ -311,7 +378,9 @@ class StyleService:
         column_name: str,
         palette: str,
         custom_colors: Optional[List[str]],
-        schema: str
+        schema: str,
+        data_source: DataSource = DataSource.POSTGIS,
+        workspace: str = None
     ) -> ClassificationResult:
         """Classify categorical column."""
         # Check cache
@@ -320,10 +389,17 @@ class StyleService:
         if cached:
             return ClassificationResult(**cached)
         
-        # Get distinct values
-        categories = self.dao.get_distinct_values(
-            table_name, column_name, schema
-        )
+        # Get distinct values based on data source
+        if data_source == DataSource.POSTGIS:
+            categories = self.dao.get_distinct_values(
+                table_name, column_name, schema
+            )
+        else:
+            # GeoServer source
+            layer_name = f"{workspace}:{table_name}"
+            categories = self.dao.get_distinct_values_geoserver(
+                layer_name, column_name
+            )
         
         # Compute classification
         result = self.classification_service.classify(
