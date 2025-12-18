@@ -156,27 +156,32 @@ async def get_legend(
 
 # ==================== Frontend Integration APIs ====================
 
-@router.get("/by-layer/{layer_id}", summary="Get Styles for Layer", description="Retrieve all active styles associated with a specific layer by layer ID. Returns style information along with layer metadata including title column, summary columns, and available style configurations for the layer.")
+@router.get("/by-layer/{layer_id_or_name}", summary="Get Styles for Layer", description="Retrieve all active styles associated with a specific layer by layer ID (UUID) or layer name (geoserver_name). Returns style information along with layer metadata including title column, summary columns, and available style configurations for the layer.")
 async def get_styles_by_layer(
-    layer_id: str,
+    layer_id_or_name: str,
     workspace: Optional[str] = Query(None, description="Workspace name (optional)"),
     service: StyleService = Depends(get_style_service),
     db: Session = Depends(get_db)
 ):
     try:
-        # Parse UUID from string
+        # Try to parse as UUID first, if it fails, treat as layer_name
+        layer_name = None
         try:
-            layer_uuid = uuid.UUID(layer_id)
+            layer_uuid = uuid.UUID(layer_id_or_name)
+            # Query metadata by ID to get geoserver_name
+            metadata = db.query(Metadata).filter(Metadata.id == layer_uuid).first()
+            if not metadata:
+                raise HTTPException(status_code=404, detail="Layer not found")
+            # Get layer name from metadata
+            layer_name = metadata.geoserver_name
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid layer ID format")
-        
-        # Query metadata by ID to get geoserver_name
-        metadata = db.query(Metadata).filter(Metadata.id == layer_uuid).first()
-        if not metadata:
-            raise HTTPException(status_code=404, detail="Layer not found")
-        
-        # Get layer name from metadata
-        layer_name = metadata.geoserver_name
+            # Not a valid UUID, treat as layer_name (geoserver_name)
+            # Query metadata by geoserver_name
+            metadata = db.query(Metadata).filter(Metadata.geoserver_name == layer_id_or_name).first()
+            if not metadata:
+                raise HTTPException(status_code=404, detail="Layer not found")
+            # Use the provided layer_id_or_name as layer_name since it's already a geoserver_name
+            layer_name = layer_id_or_name
         
         # Extract workspace and table name from layer name (e.g., "metastring:gbif" -> workspace="metastring", table="gbif")
         table_name = layer_name
@@ -252,7 +257,7 @@ async def get_styles_by_layer(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error getting styles for layer ID {layer_id}: {e}", exc_info=True)
+        logger.error(f"Error getting styles for layer ID/name {layer_id_or_name}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 

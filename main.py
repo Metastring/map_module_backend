@@ -12,6 +12,9 @@ from metadata.api.api import metadata_app
 # Import styles API for layer styling
 from styles.api.api import router as styles_router
 
+# Import register dataset API
+from register_dataset.api.api import router as register_dataset_router
+
 # Allow CORS (if needed)
 from fastapi.middleware.cors import CORSMiddleware
 origins = ["*"]
@@ -41,7 +44,8 @@ app.include_router(geoserver_admin_router, prefix="/admin", tags=["geoserver-adm
 app.include_router(SpatialQueryAPI1.router, prefix=SpatialQueryAPI1.version, tags=["spatial-search"])  # GraphQL APIs for spatial data queries including polygon-based and scientific name searches
 app.include_router(upload_log_router, prefix="/upload_log", tags=["upload-log"])
 app.include_router(metadata_app, prefix="/metadata", tags=["metadata-graphql"])  # Add metadata GraphQL endpoint
-app.include_router(styles_router, prefix="/styles", tags=["styles"]) 
+app.include_router(styles_router, prefix="/styles", tags=["styles"])
+app.include_router(register_dataset_router, prefix="/register_dataset", tags=["register-dataset"]) 
 
 # Add health check endpoint for GraphQL service
 @app.get("/health")

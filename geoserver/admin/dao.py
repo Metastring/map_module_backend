@@ -1,5 +1,10 @@
 import requests
+import logging
+import xml.etree.ElementTree as ET
+from typing import List
 from geoserver.admin.model import UpdateRequest
+
+logger = logging.getLogger(__name__)
 
 
 class GeoServerAdminDAO:
@@ -353,4 +358,162 @@ class GeoServerAdminDAO:
         """
         url = f"{self.base_url}/styles/{style_name}.json"
         return requests.get(url, auth=self.auth)
+
+    def get_feature_type_details(self, workspace: str, datastore: str, feature_type: str):
+        """
+        Get details of a specific feature type (table/layer resource).
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{feature_type}.json"
+        return requests.get(url, auth=self.auth)
+
+    def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict):
+        """
+        Update a feature type configuration (SRS, bounding boxes, etc.).
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{feature_type}.json"
+        headers = {"Content-type": "application/json"}
+        return requests.put(url, auth=self.auth, json=config, headers=headers)
+
+    def configure_layer_tile_caching(
+        self, 
+        workspace: str, 
+        layer_name: str,
+        tile_formats: List[str] = None,
+        gridset: str = "EPSG:3857"
+    ):
+        """
+        Configure tile caching for a layer.
+        This configures the GeoWebCache (GWC) settings for the layer.
+        Sets up mimeFormats (image formats) and availableGridsets.
+        """
+        if tile_formats is None:
+            tile_formats = [
+                "application/json;type=geojson",
+                "application/json;type=topojson",
+                "application/vnd.mapbox-vector-tile"
+            ]
+        
+        # GWC configuration endpoint
+        url = f"{self.base_url}/gwc/rest/layers/{workspace}:{layer_name}.xml"
+        
+        # Get existing configuration first
+        get_response = requests.get(url, auth=self.auth)
+        
+        if get_response.status_code != 200:
+            # If layer doesn't exist in GWC, create a new configuration
+            logger.info(f"Creating new GWC configuration for layer {workspace}:{layer_name}")
+            xml_content = self._create_gwc_layer_xml(tile_formats, gridset)
+        else:
+            # Parse and update existing XML
+            try:
+                root = ET.fromstring(get_response.text)
+                xml_content = self._update_gwc_layer_xml(root, tile_formats, gridset)
+            except ET.ParseError as e:
+                logger.error(f"Failed to parse GWC XML for {workspace}:{layer_name}: {e}")
+                # Fallback: create new XML
+                xml_content = self._create_gwc_layer_xml(tile_formats, gridset)
+        
+        # PUT the updated configuration
+        headers = {"Content-type": "application/xml"}
+        put_response = requests.put(url, auth=self.auth, data=xml_content, headers=headers)
+        
+        if put_response.status_code in [200, 201]:
+            logger.info(
+                f"Successfully configured GWC tile caching for {workspace}:{layer_name} "
+                f"with formats: {tile_formats} and gridset: {gridset}"
+            )
+        else:
+            logger.warning(
+                f"Failed to configure GWC for {workspace}:{layer_name}: "
+                f"status {put_response.status_code}, response: {put_response.text}"
+            )
+        
+        return put_response
+    
+    def _create_gwc_layer_xml(self, tile_formats: List[str], gridset: str) -> str:
+        """Create a new GWC layer XML configuration."""
+        root = ET.Element("GeoServerLayer")
+        
+        # Add enabled flag
+        enabled = ET.SubElement(root, "enabled")
+        enabled.text = "true"
+        
+        # Add mimeFormats
+        mime_formats = ET.SubElement(root, "mimeFormats")
+        for fmt in tile_formats:
+            string_elem = ET.SubElement(mime_formats, "string")
+            string_elem.text = fmt
+        
+        # Add metaWidthHeight
+        meta_width_height = ET.SubElement(root, "metaWidthHeight")
+        meta_width_height.text = "4 4"
+        
+        # Add expireCache
+        expire_cache = ET.SubElement(root, "expireCache")
+        expire_cache.text = "0"
+        
+        # Add expireClients
+        expire_clients = ET.SubElement(root, "expireClients")
+        expire_clients.text = "0"
+        
+        # Add availableGridsets
+        available_gridsets = ET.SubElement(root, "availableGridsets")
+        gridset_elem = ET.SubElement(available_gridsets, "gridSet")
+        gridset_elem.text = gridset
+        
+        # Convert to string
+        # ET.indent is available in Python 3.9+
+        try:
+            ET.indent(root, space="  ")
+        except AttributeError:
+            # Fallback for older Python versions
+            pass
+        return ET.tostring(root, encoding="unicode")
+    
+    def _update_gwc_layer_xml(
+        self, 
+        root: ET.Element, 
+        tile_formats: List[str], 
+        gridset: str
+    ) -> str:
+        """Update existing GWC layer XML configuration."""
+        # Update or create mimeFormats
+        mime_formats = root.find("mimeFormats")
+        if mime_formats is None:
+            mime_formats = ET.SubElement(root, "mimeFormats")
+        else:
+            # Clear existing formats
+            mime_formats.clear()
+        
+        # Add new formats
+        for fmt in tile_formats:
+            string_elem = ET.SubElement(mime_formats, "string")
+            string_elem.text = fmt
+        
+        # Update or create availableGridsets
+        available_gridsets = root.find("availableGridsets")
+        if available_gridsets is None:
+            available_gridsets = ET.SubElement(root, "availableGridsets")
+        else:
+            # Clear existing gridsets
+            available_gridsets.clear()
+        
+        # Add gridset
+        gridset_elem = ET.SubElement(available_gridsets, "gridSet")
+        gridset_elem.text = gridset
+        
+        # Ensure enabled is true
+        enabled = root.find("enabled")
+        if enabled is None:
+            enabled = ET.SubElement(root, "enabled")
+        enabled.text = "true"
+        
+        # Convert to string
+        # ET.indent is available in Python 3.9+
+        try:
+            ET.indent(root, space="  ")
+        except AttributeError:
+            # Fallback for older Python versions
+            pass
+        return ET.tostring(root, encoding="unicode")
 

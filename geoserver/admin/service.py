@@ -1,3 +1,5 @@
+from typing import List
+
 from geoserver.admin.dao import GeoServerAdminDAO
 from geoserver.admin.model import UpdateRequest
 from geoserver.model import CreateLayerRequest
@@ -162,4 +164,44 @@ class GeoServerAdminService:
         if not style_name:
             raise ValueError("Style name is required.")
         return self.dao.get_style_details(style_name)
+
+    def get_feature_type_details(self, workspace: str, datastore: str, feature_type: str):
+        """
+        Get details of a specific feature type.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        if not feature_type:
+            raise ValueError("Feature type name is required.")
+        return self.dao.get_feature_type_details(workspace, datastore, feature_type)
+
+    def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict):
+        """
+        Update a feature type configuration.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        if not feature_type:
+            raise ValueError("Feature type name is required.")
+        return self.dao.update_feature_type(workspace, datastore, feature_type, config)
+
+    def configure_layer_tile_caching(
+        self,
+        workspace: str,
+        layer_name: str,
+        tile_formats: List[str] = None,
+        gridset: str = "EPSG:3857"
+    ):
+        """
+        Configure tile caching for a layer.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not layer_name:
+            raise ValueError("Layer name is required.")
+        return self.dao.configure_layer_tile_caching(workspace, layer_name, tile_formats, gridset)
 
