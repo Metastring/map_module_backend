@@ -12,8 +12,6 @@ from geoserver.model import (CreateLayerRequest, PostGISRequest, PublishUploadLo
 from geoserver.service import GeoServerService
 from metadata.models.schema import Metadata
 from metadata.service.service import MetadataService
-from styles.dao.dao import StyleDAO
-from styles.service.style_service import StyleService
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
 from utils.config import *  # noqa: E402, F403
@@ -95,22 +93,7 @@ def _map_metadata_to_layer(metadata: Metadata) -> Dict:
     }
 
 
-def _format_column_name(column_name: str) -> str:
-    """
-    Convert column name to human-readable title.
-    Examples:
-    - species_count -> Species Count
-    - year_of_observation -> Year Of Observation
-    - geology -> Geology
-    """
-    # Replace underscores with spaces
-    title = column_name.replace("_", " ")
-    # Capitalize first letter of each word
-    title = " ".join(word.capitalize() for word in title.split())
-    return title
-
-
-@router.get("/layers", summary="List All Layers (Used for frontend api calls)", description="Retrieve a list of all layers in GeoServer with their metadata and associated styles. This API returns enhanced layer information including metadata (if available) and style configurations for each layer.")
+@router.get("/layers", summary="List All Layers (Used for frontend api calls)", description="Retrieve a list of all layers in GeoServer with their metadata. This API returns enhanced layer information including metadata (if available) for each layer.")
 async def list_layers(db: Session = Depends(get_db)):
     try:
         response = geo_service.list_layers()
@@ -141,44 +124,7 @@ async def list_layers(db: Session = Depends(get_db)):
                         f"Error batch fetching metadata: {str(e)}. Continuing without metadata."
                     )
 
-            # Get styles for all layers (batch fetch)
-            # Extract workspace and table names from layer names
-            # (e.g., "ne:gbif" -> workspace="ne", table="gbif")
-            layer_to_workspace_table = {}
-            unique_workspace_table_pairs = set()
-            for layer in layers_list:
-                layer_name = layer.get("name")
-                if layer_name:
-                    if ":" in layer_name:
-                        workspace_name = layer_name.split(":")[0]
-                        table_name = layer_name.split(":")[-1]
-                    else:
-                        workspace_name = None  # No workspace prefix
-                        table_name = layer_name
-                    layer_to_workspace_table[layer_name] = (workspace_name, table_name)
-                    if workspace_name:
-                        unique_workspace_table_pairs.add((workspace_name, table_name))
-
-            # Batch fetch styles for all workspace+table combinations
-            styles_by_workspace_table = {}
-            style_dao = None
-            if unique_workspace_table_pairs:
-                try:
-                    style_dao = StyleDAO(db)
-                    # Fetch all active styles (we'll filter by workspace+table in memory)
-                    all_styles, _ = style_dao.list_styles(is_active=True, skip=0, limit=10000)
-
-                    # Group styles by workspace and table name
-                    for style in all_styles:
-                        key = (style.workspace, style.layer_table_name)
-                        if key in unique_workspace_table_pairs:
-                            if key not in styles_by_workspace_table:
-                                styles_by_workspace_table[key] = []
-                            styles_by_workspace_table[key].append(style)
-                except Exception as e:
-                    logger.warning(f"Error fetching styles: {str(e)}. Continuing without styles.")
-
-            # Enhance each layer with metadata and styles
+            # Enhance each layer with metadata
             enhanced_layers = []
             for layer in layers_list:
                 layer_name = layer.get("name")
@@ -196,46 +142,6 @@ async def list_layers(db: Session = Depends(get_db)):
                     if metadata.geoserver_name:
                         wms_link = geo_service.get_tile_layer_url(metadata.geoserver_name)
                         enhanced_layer["wms_link"] = wms_link
-
-                # Add styles if available (filter by both workspace and table name)
-                if layer_name and layer_name in layer_to_workspace_table:
-                    workspace_name, table_name = layer_to_workspace_table[layer_name]
-                    # Only match styles with the same workspace and table name
-                    key = (workspace_name, table_name)
-                    if key in styles_by_workspace_table:
-                        styles = styles_by_workspace_table[key]
-                        style_list = []
-                        for style in styles:
-                            # Get column data type
-                            col_type = style.data_type or "unknown"
-                            if style_dao:
-                                try:
-                                    col_type = style_dao.get_column_data_type(
-                                        style.layer_table_name,
-                                        style.color_by,
-                                        "public"
-                                    ) or col_type
-                                except Exception:
-                                    pass
-
-                            # Generate human-readable title
-                            style_title = _format_column_name(style.color_by)
-
-                            style_list.append({
-                                "styleName": (
-                                    style.generated_style_name or
-                                    f"{style.layer_table_name}_{style.color_by}_style"
-                                ),
-                                "styleTitle": style_title,
-                                "styleType": col_type,
-                                "styleId": style.id,
-                                "colorBy": style.color_by
-                            })
-                        enhanced_layer["styles"] = style_list
-                    else:
-                        enhanced_layer["styles"] = []
-                else:
-                    enhanced_layer["styles"] = []
 
                 enhanced_layers.append(enhanced_layer)
 

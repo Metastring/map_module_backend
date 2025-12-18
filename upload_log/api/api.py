@@ -221,7 +221,7 @@ def get_upload_log(log_id: UUID, db: Session = Depends(get_db)) -> UploadLogOut:
 
 ########################## Upload xlsx file ##########################
 
-@router.post("/create-table-and-insert1/", summary="Upload XLSX and log the upload in the database and publish to GeoServer (Used for frontend api calls)", description="Upload an XLSX file and automatically create a PostGIS table with the data. This endpoint processes Excel files, creates a database table in the specified schema, inserts the data, publishes it to GeoServer as a layer, and optionally logs the upload if uploaded_by is provided.")
+@router.post("/create-table-and-insert1/", summary="Upload XLSX/CSV and log the upload in the database and publish to GeoServer (Used for frontend api calls)", description="Upload an XLSX or CSV file and automatically create a PostGIS table with the data. This endpoint processes Excel or CSV files, creates a database table in the specified schema, inserts the data, publishes it to GeoServer as a layer, and optionally logs the upload if uploaded_by is provided.")
 async def create_table_and_insert1(
     table_name: str = Form(...),
     db_schema: str = Form(..., alias="schema"),
@@ -233,8 +233,8 @@ async def create_table_and_insert1(
     store_name: Optional[str] = Form(default=None),
     db: Session = Depends(get_db),
 ):
-    if not file.filename or not file.filename.endswith(".xlsx"):
-        raise HTTPException(status_code=400, detail="Only XLSX files are allowed")
+    if not file.filename or not (file.filename.endswith(".xlsx") or file.filename.endswith(".csv")):
+        raise HTTPException(status_code=400, detail="Only XLSX and CSV files are allowed")
 
     try:
         # Generate dataset_id (will be used as id in upload_logs if logging is enabled)
@@ -250,10 +250,13 @@ async def create_table_and_insert1(
                 # Resolve layer_name
                 resolved_layer_name = layer_name or table_name
                 
+                # Determine file format from filename
+                file_format = "csv" if stored_path.suffix.lower() == ".csv" else "xlsx"
+                
                 # Create upload_log entry BEFORE any table creation/GeoServer operations
                 upload_log = UploadLogCreate(
                     layer_name=resolved_layer_name,
-                    file_format="xlsx",
+                    file_format=file_format,
                     data_type=DataType.UNKNOWN,
                     crs="UNKNOWN",
                     bbox=None,

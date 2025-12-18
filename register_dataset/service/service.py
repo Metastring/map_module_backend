@@ -80,9 +80,13 @@ class RegisterDatasetService:
                     import os
                     
                     resolved_layer_name = request.layer_name or request.table_name
+                    
+                    # Determine file format from filename
+                    file_format = "csv" if stored_path.suffix.lower() == ".csv" else "xlsx"
+                    
                     upload_log = UploadLogCreate(
                         layer_name=resolved_layer_name,
-                        file_format="xlsx",
+                        file_format=file_format,
                         data_type=DataType.UNKNOWN,
                         crs="UNKNOWN",
                         bbox=None,
@@ -281,38 +285,19 @@ class RegisterDatasetService:
                 }
             }
 
-            # For bounding boxes, we'll trigger recalculation by omitting them
-            # GeoServer will recalculate when we use the recalculate endpoint
-            # Or we can keep existing bounding boxes and let GeoServer recalculate on next access
+            # For bounding boxes, we'll trigger recalculation by omitting them from the config
+            # and using the recalculate query parameter in the PUT request
+            # GeoServer will recalculate bounding boxes when the recalculate parameter is provided
 
-            # Update feature type
+            # Update feature type with recalculate parameter to trigger bounding box recalculation
             update_response = self.geo_admin_service.update_feature_type(
-                workspace, datastore, layer_name, updated_config
+                workspace, datastore, layer_name, updated_config, recalculate=True
             )
 
             if update_response.status_code not in [200, 201]:
                 logger.warning(f"Failed to update feature type: {update_response.text}")
             else:
-                logger.info(f"Successfully configured feature type {layer_name}")
-
-            # Trigger recalculation of bounding boxes
-            # GeoServer REST API: POST to recalculate endpoint
-            try:
-                recalculate_url = (
-                    f"{self.geo_admin_service.dao.base_url}/workspaces/{workspace}/"
-                    f"datastores/{datastore}/featuretypes/{layer_name}/recalculate"
-                )
-                recalc_response = requests.post(
-                    recalculate_url,
-                    auth=self.geo_admin_service.dao.auth,
-                    headers={"Content-type": "application/json"},
-                )
-                if recalc_response.status_code in [200, 201]:
-                    logger.info(f"Successfully triggered bounding box recalculation for {layer_name}")
-                else:
-                    logger.warning(f"Could not trigger bounding box recalculation: {recalc_response.text}")
-            except Exception as recalc_exc:
-                logger.warning(f"Error triggering bounding box recalculation: {recalc_exc}")
+                logger.info(f"Successfully configured feature type {layer_name} and triggered bounding box recalculation")
 
             # Configure tile caching
             # Configure GeoWebCache (GWC) tile formats and gridset

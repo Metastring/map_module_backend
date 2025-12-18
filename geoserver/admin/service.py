@@ -177,9 +177,16 @@ class GeoServerAdminService:
             raise ValueError("Feature type name is required.")
         return self.dao.get_feature_type_details(workspace, datastore, feature_type)
 
-    def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict):
+    def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict, recalculate: bool = False):
         """
         Update a feature type configuration.
+        
+        Args:
+            workspace: Workspace name
+            datastore: Datastore name
+            feature_type: Feature type name
+            config: Feature type configuration dictionary
+            recalculate: If True, trigger bounding box recalculation via query parameter
         """
         if not workspace:
             raise ValueError("Workspace name is required.")
@@ -187,7 +194,7 @@ class GeoServerAdminService:
             raise ValueError("Datastore name is required.")
         if not feature_type:
             raise ValueError("Feature type name is required.")
-        return self.dao.update_feature_type(workspace, datastore, feature_type, config)
+        return self.dao.update_feature_type(workspace, datastore, feature_type, config, recalculate=recalculate)
 
     def configure_layer_tile_caching(
         self,

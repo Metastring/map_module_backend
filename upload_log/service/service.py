@@ -146,17 +146,21 @@ class UploadLogService:
     ) -> str:
         # Read the file contents
         # Handle different file input types
+        filename = None
         if hasattr(file, 'file') and hasattr(file, 'filename'):
             # It's a SimpleNamespace with file attribute (from API)
             contents = file.file.read()
+            filename = file.filename
         elif hasattr(file, 'read'):
             # It's an UploadFile or file-like object
             try:
                 # Try async read first
                 contents = await file.read()
+                filename = getattr(file, 'filename', None)
             except (TypeError, AttributeError):
                 # Fallback for sync file objects
                 contents = file.read()
+                filename = getattr(file, 'filename', None)
         else:
             raise ValueError("Invalid file object provided")
 
@@ -168,8 +172,120 @@ class UploadLogService:
             else:
                 logger.info(f"Using provided dataset_id: {dataset_id} for table {schema}.{table_name}")
 
-            # Read the Excel file into a Pandas DataFrame
-            df = pd.read_excel(io.BytesIO(contents))
+            is_excel_file = False
+            if len(contents) >= 2:
+                if contents[:2] == b'PK':
+                    is_excel_file = True
+                elif len(contents) >= 8 and contents[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
+                    is_excel_file = True
+            
+            has_csv_extension = filename and filename.lower().endswith('.csv')
+            is_csv = has_csv_extension and not is_excel_file
+            
+            if is_csv:
+                try:
+                    sample = contents[:1024] if len(contents) > 1024 else contents
+                    text_sample = sample.decode('utf-8', errors='strict')
+                    non_printable = sum(1 for c in text_sample if ord(c) < 32 and c not in '\n\r\t')
+                    if len(text_sample) > 0 and non_printable / len(text_sample) > 0.3:
+                        is_csv = False
+                        is_excel_file = True
+                except UnicodeDecodeError:
+                    if contents[:2] == b'PK':
+                        is_csv = False
+                        is_excel_file = True
+            
+            if is_csv:
+                encodings_to_try = ['utf-8', 'utf-8-sig', 'latin-1', 'cp1252', 'iso-8859-1']
+                df = None
+                last_error = None
+                
+                for encoding in encodings_to_try:
+                    try:
+                        parsing_strategies = [
+                            {
+                                'engine': 'python',
+                                'sep': None,
+                                'on_bad_lines': 'skip',
+                                'skipinitialspace': True,
+                                'quotechar': '"',
+                                'doublequote': True,
+                                'skip_blank_lines': True
+                            },
+                            {
+                                'engine': 'python',
+                                'sep': ',',
+                                'on_bad_lines': 'skip',
+                                'skipinitialspace': True,
+                                'quotechar': '"',
+                                'doublequote': True
+                            },
+                            {
+                                'engine': 'c',
+                                'sep': ',',
+                                'on_bad_lines': 'skip',
+                                'skipinitialspace': True
+                            },
+                            {
+                                'engine': 'python',
+                                'sep': None,
+                                'error_bad_lines': False,
+                                'warn_bad_lines': True,
+                                'skipinitialspace': True
+                            },
+                            {
+                                'engine': 'c',
+                                'sep': ',',
+                                'error_bad_lines': False,
+                                'warn_bad_lines': True,
+                                'skipinitialspace': True
+                            },
+                            {
+                                'engine': 'python',
+                                'sep': None,
+                                'skipinitialspace': True
+                            }
+                        ]
+                        
+                        df = None
+                        for strategy in parsing_strategies:
+                            try:
+                                read_params = {'encoding': encoding, **strategy}
+                                df = pd.read_csv(io.BytesIO(contents), **read_params)
+                                break
+                            except (TypeError, ValueError):
+                                continue
+                            except Exception:
+                                continue
+                        
+                        if df is not None and not df.empty:
+                            break
+                        else:
+                            raise ValueError(f"All parsing strategies failed for encoding {encoding}")
+                            
+                    except UnicodeDecodeError as e:
+                        last_error = e
+                        continue
+                    except Exception as e:
+                        last_error = e
+                        continue
+                
+                if df is None:
+                    error_msg = f"Could not read CSV file '{filename}'. Tried encodings: {', '.join(encodings_to_try)}. Last error: {str(last_error)}"
+                    raise HTTPException(status_code=400, detail=error_msg)
+                
+                if df.empty:
+                    raise HTTPException(status_code=400, detail=f"CSV file '{filename}' appears to be empty or could not be parsed correctly.")
+                
+                for col in df.columns:
+                    col_str = str(col)
+                    if len(col_str) > 200:
+                        raise HTTPException(status_code=400, detail=f"File '{filename}' appears to be a binary file (Excel/ZIP) misidentified as CSV. Column names contain binary data. Please ensure the file is actually a CSV file or upload it with .xlsx extension.")
+                    non_ascii_count = sum(1 for c in col_str if ord(c) > 127 or (ord(c) < 32 and c not in '\n\r\t'))
+                    if len(col_str) > 0 and non_ascii_count / len(col_str) > 0.5:
+                        raise HTTPException(status_code=400, detail=f"File '{filename}' appears to be a binary file misidentified as CSV. Column name '{col_str[:50]}...' contains binary data. Please ensure the file is actually a CSV file or upload it with .xlsx extension.")
+            else:
+                df = pd.read_excel(io.BytesIO(contents))
 
             # Step 1: Create table dynamically
             logger.info(f"Creating table {schema}.{table_name}")

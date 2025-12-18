@@ -60,7 +60,7 @@ def get_register_service(db: Session = Depends(get_db)) -> RegisterDatasetServic
     summary="Register Complete Dataset",
     description="""
     Register a complete dataset with a single API call. This endpoint:
-    1. Uploads XLSX file and creates PostGIS table (calls create-table-and-insert1)
+    1. Uploads XLSX or CSV file and creates PostGIS table (calls create-table-and-insert1)
     2. Configures GeoServer layer (SRS, bounding boxes, tile caching)
     3. Creates metadata entry
     4. Generates styles for multiple columns
@@ -70,7 +70,7 @@ def get_register_service(db: Session = Depends(get_db)) -> RegisterDatasetServic
 )
 async def register_dataset(
     # File upload
-    file: UploadFile = File(..., description="XLSX file to upload"),
+    file: UploadFile = File(..., description="XLSX or CSV file to upload"),
     # Form data as JSON string (will be parsed into RegisterDatasetFormData)
     form_data_json: str = Form(..., description="JSON string containing form data"),
     # Service dependency
@@ -132,11 +132,18 @@ async def register_dataset(
                 detail=f"Invalid data_source: {form_data.data_source}. Must be 'postgis' or 'geoserver'"
             )
 
-        # Validate file
-        if not file.filename or not file.filename.endswith(".xlsx"):
+        # Validate file extension (actual file type detection happens in service layer)
+        if not file.filename:
             raise HTTPException(
                 status_code=400,
-                detail="Only XLSX files are allowed"
+                detail="File must have a filename"
+            )
+        
+        file_extension = file.filename.lower()
+        if not (file_extension.endswith(".csv") or file_extension.endswith(".xlsx") or file_extension.endswith(".xls")):
+            raise HTTPException(
+                status_code=400,
+                detail="Only CSV, XLSX, and XLS files are allowed"
             )
 
         # Build request

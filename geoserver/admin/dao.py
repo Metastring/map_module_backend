@@ -366,11 +366,20 @@ class GeoServerAdminDAO:
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{feature_type}.json"
         return requests.get(url, auth=self.auth)
 
-    def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict):
+    def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict, recalculate: bool = False):
         """
         Update a feature type configuration (SRS, bounding boxes, etc.).
+        
+        Args:
+            workspace: Workspace name
+            datastore: Datastore name
+            feature_type: Feature type name
+            config: Feature type configuration dictionary
+            recalculate: If True, add query parameter to trigger bounding box recalculation
         """
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{feature_type}.json"
+        if recalculate:
+            url += "?recalculate=nativeBoundingBox,latLonBoundingBox"
         headers = {"Content-type": "application/json"}
         return requests.put(url, auth=self.auth, json=config, headers=headers)
 
