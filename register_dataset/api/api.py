@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import json
+from styles.models.model import DataSource as DataSourceEnum
 from database.database import get_db
 from register_dataset.model.model import (
     RegisterDatasetRequest,
@@ -123,7 +124,6 @@ async def register_dataset(
             )
 
         # Parse data_source
-        from styles.models.model import DataSource as DataSourceEnum
         try:
             data_source_enum = DataSourceEnum(form_data.data_source.lower())
         except ValueError:

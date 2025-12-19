@@ -1,11 +1,14 @@
 import os
 import sys
 import logging
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException
 from geoserver.admin.dao import GeoServerAdminDAO
 from geoserver.admin.model import UpdateRequest
 from geoserver.admin.service import GeoServerAdminService
+from geoserver.dao import GeoServerDAO
 from geoserver.model import CreateLayerRequest
+from geoserver.service import GeoServerService
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'utils'))
 from utils.config import *  # noqa: E402, F403
 
@@ -21,6 +24,68 @@ geo_admin_dao = GeoServerAdminDAO(
     password=geoserver_password
 )
 geo_admin_service = GeoServerAdminService(geo_admin_dao)
+
+# Initialize main GeoServer service for helper functions
+geo_dao = GeoServerDAO(
+    base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
+    username=geoserver_username,
+    password=geoserver_password
+)
+geo_service = GeoServerService(geo_dao)
+
+
+def get_layer_bbox(layer_name: str) -> Optional[List[List[float]]]:
+    """
+    Helper function to extract bounding box from layer details.
+    Returns bbox in format [[minx, miny], [maxx, maxy]] or None if not available.
+    """
+    try:
+        response = geo_service.get_layer_details(layer_name)
+        if response.status_code != 200:
+            return None
+        
+        layer_json = response.json() or {}
+        layer_data = layer_json.get("layer", {})
+        resource = layer_data.get("resource", {})
+        
+        # Try to get bounding box from resource
+        # GeoServer typically has nativeBoundingBox or latLonBoundingBox
+        bbox_data = resource.get("latLonBoundingBox") or resource.get("nativeBoundingBox")
+        
+        if bbox_data:
+            minx = bbox_data.get("minx")
+            miny = bbox_data.get("miny")
+            maxx = bbox_data.get("maxx")
+            maxy = bbox_data.get("maxy")
+            
+            if all(v is not None for v in [minx, miny, maxx, maxy]):
+                return [[float(minx), float(miny)], [float(maxx), float(maxy)]]
+        
+        # If bbox not in resource, try to get from featureType
+        resource_href = resource.get("href")
+        if resource_href:
+            if not resource_href.endswith(".json"):
+                resource_href = resource_href + ".json"
+            
+            ft_response = geo_service.dao.get_url(resource_href)
+            if ft_response.status_code == 200:
+                ft_json = ft_response.json() or {}
+                feature_type = ft_json.get("featureType", {})
+                bbox_data = feature_type.get("latLonBoundingBox") or feature_type.get("nativeBoundingBox")
+                
+                if bbox_data:
+                    minx = bbox_data.get("minx")
+                    miny = bbox_data.get("miny")
+                    maxx = bbox_data.get("maxx")
+                    maxy = bbox_data.get("maxy")
+                    
+                    if all(v is not None for v in [minx, miny, maxx, maxy]):
+                        return [[float(minx), float(miny)], [float(maxx), float(maxy)]]
+        
+        return None
+    except Exception as e:
+        logger.warning(f"Error fetching bbox for layer {layer_name}: {str(e)}")
+        return None
 
 # Workspace Management APIs
 @router.get("/workspaces", summary="List All Workspaces", description="Retrieve a list of all workspaces in GeoServer. Workspaces are logical groupings of data stores and layers.")

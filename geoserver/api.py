@@ -10,6 +10,7 @@ from database.database import get_db
 from geoserver.dao import GeoServerDAO
 from geoserver.model import (CreateLayerRequest, PostGISRequest, PublishUploadLogRequest, PublishUploadLogResponse)
 from geoserver.service import GeoServerService
+from geoserver.admin.api import get_layer_bbox
 from metadata.models.schema import Metadata
 from metadata.service.service import MetadataService
 
@@ -93,6 +94,43 @@ def _map_metadata_to_layer(metadata: Metadata) -> Dict:
     }
 
 
+def _map_metadata_to_layer1(metadata: Metadata) -> Dict:
+    """
+    Helper function to map metadata object to layer response dictionary for /layers1 endpoint.
+    Uses renamed keys and excludes certain fields.
+    """
+    return {
+        "id": str(metadata.id),
+        "title": metadata.name_of_dataset,
+        "tags": metadata.keywords,
+        "purposeOfCreatingData": metadata.purpose_of_creating_data,
+        "layerType": metadata.data_type,
+        "createdBy": metadata.contact_person,
+        "organization": metadata.organization,
+        "contactEmail": metadata.contact_email,
+        "country": metadata.country,
+        "createdDate": metadata.created_on.isoformat() if metadata.created_on else None,
+        "modifiedDate": metadata.updated_on.isoformat() if metadata.updated_on else None,
+        "accessConstraints": metadata.access_constraints,
+        "useConstraints": metadata.use_constraints,
+        "mailingAddress": metadata.mailing_address,
+        "cityLocalityCountry": metadata.city_locality_country,
+        "attribution": None,
+        "author": None,
+        "pdfLink": None,
+        "pageId": None,
+        "downloadAccess": "ALL",
+        "url": None,
+        "license": None,
+        "uploaderUserId": None,
+        "isDownloadable": None,
+        "layerStatus": None,
+        "portalId": None
+    }
+
+
+
+
 @router.get("/layers", summary="List All Layers (Used for frontend api calls)", description="Retrieve a list of all layers in GeoServer with their metadata. This API returns enhanced layer information including metadata (if available) for each layer.")
 async def list_layers(db: Session = Depends(get_db)):
     try:
@@ -158,6 +196,94 @@ async def list_layers(db: Session = Depends(get_db)):
         raise
     except Exception as e:
         logger.error(f"Error in list_layers: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/layers1", summary="List All Layers (Used for frontend api calls)", description="Retrieve a list of all layers in GeoServer with their metadata. This API returns enhanced layer information including metadata (if available) for each layer.")
+async def list_layers1(db: Session = Depends(get_db)):
+    try:
+        response = geo_service.list_layers()
+        if response.status_code == 200:
+            layers_data = response.json()
+
+            # Extract layers list
+            layers_list = layers_data.get("layers", {}).get("layer", [])
+
+            if not layers_list:
+                return {
+                    "layers": [],
+                    "page": 1,
+                    "totalPage": "",
+                    "currPage": ""
+                }
+
+            # Collect all layer names for batch metadata fetching
+            layer_names = [layer.get("name") for layer in layers_list if layer.get("name")]
+
+            # Batch fetch all metadata in one query (solves N+1 problem)
+            metadata_dict: Dict[str, Metadata] = {}
+            if layer_names:
+                try:
+                    metadata_list = MetadataService.get_by_geoserver_names(layer_names, db)
+                    # Create a dictionary for O(1) lookup by geoserver_name
+                    metadata_dict = {meta.geoserver_name: meta for meta in metadata_list}
+                    logger.info(
+                        f"Found metadata for {len(metadata_dict)} out of {len(layer_names)} layers"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Error batch fetching metadata: {str(e)}. Continuing without metadata."
+                    )
+
+            # Enhance each layer with metadata
+            enhanced_layers = []
+            for layer in layers_list:
+                layer_name = layer.get("name")
+                enhanced_layer = {
+                    "name": layer.get("name"),
+                    "attribution": None,
+                    "author": None,
+                    "pdfLink": None,
+                    "pageId": None,
+                    "downloadAccess": "ALL",
+                    "url": None,
+                    "license": None,
+                    "uploaderUserId": None,
+                    "isDownloadable": None,
+                    "layerStatus": None,
+                    "portalId": None
+                }
+
+                # Add metadata if available
+                if layer_name and layer_name in metadata_dict:
+                    metadata = metadata_dict[layer_name]
+                    enhanced_layer.update(_map_metadata_to_layer1(metadata))
+
+                    # Add thumbnail (WMS link)
+                    if metadata.geoserver_name:
+                        wms_link = geo_service.get_tile_layer_url(metadata.geoserver_name)
+                        enhanced_layer["thumbnail"] = wms_link
+
+                # Fetch and add bounding box
+                if layer_name:
+                    bbox = get_layer_bbox(layer_name)
+                    enhanced_layer["bbox"] = bbox
+
+                enhanced_layers.append(enhanced_layer)
+
+            # Return the enhanced response
+            return {
+                "layers": enhanced_layers,
+                "page": 1,
+                "totalPage": "",
+                "currPage": ""
+            }
+        else:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+    except HTTPException:
+        # Re-raise HTTPExceptions
+        raise
+    except Exception as e:
+        logger.error(f"Error in list_layers1: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 ####################################API to Get Tile Layer URL#############################

@@ -21,6 +21,9 @@ from metadata.service.service import MetadataService
 from metadata.models.model import MetadataInput
 from styles.service.style_service import StyleService
 from styles.models.model import StyleGenerateRequest, DataSource
+from upload_log.api.api import _persist_upload
+import os
+from upload_log.models.model import UploadLogCreate, DataType
 from utils.config import (
     geoserver_host,
     geoserver_port,
@@ -70,14 +73,11 @@ class RegisterDatasetService:
             logger.info(f"Step 1: Creating table and inserting data for {request.table_name}")
             
             # Persist file for create_table_and_insert1
-            from upload_log.api.api import _persist_upload
             stored_path = await _persist_upload(file)
             
             try:
                 # Create upload log if uploaded_by is provided
                 if request.uploaded_by and request.uploaded_by.strip():
-                    from upload_log.models.model import UploadLogCreate, DataType
-                    import os
                     
                     resolved_layer_name = request.layer_name or request.table_name
                     
@@ -239,6 +239,9 @@ class RegisterDatasetService:
             logger.error(f"Error registering dataset: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=f"Failed to register dataset: {str(e)}")
 
+
+########################################### Helper Methods ###########################################
+######################################## Geoserver tilecatching layer configuration ###########################################
     async def _configure_geoserver_layer(
         self,
         workspace: str,
