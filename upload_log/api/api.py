@@ -1,11 +1,13 @@
 import logging
 import os
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4, UUID
 
 import aiofiles
+import requests
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -15,9 +17,12 @@ from upload_log.service.metadata import derive_file_metadata
 from upload_log.service.service import UploadLogService
 from geoserver.dao import GeoServerDAO
 from geoserver.service import GeoServerService
+from geoserver.admin.dao import GeoServerAdminDAO
+from geoserver.admin.service import GeoServerAdminService
 from upload_log.dao.dao import UploadLogDAO
 from utils.config import geoserver_host, geoserver_port, geoserver_username, geoserver_password
 from types import SimpleNamespace
+from pyproj import CRS
 
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
@@ -30,6 +35,42 @@ geo_dao = GeoServerDAO(
     password=geoserver_password,
 )
 geo_service = GeoServerService(geo_dao)
+
+geo_admin_dao = GeoServerAdminDAO(
+    base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
+    username=geoserver_username,
+    password=geoserver_password,
+)
+geo_admin_service = GeoServerAdminService(geo_admin_dao)
+
+
+def _normalize_crs_to_epsg(crs_string: Optional[str]) -> Optional[str]:
+    """
+    Normalize CRS string to EPSG format (e.g., 'EPSG:4326').
+    Returns None if CRS cannot be determined.
+    """
+    if not crs_string:
+        return None
+    
+    try:
+        # Try to parse the CRS and get EPSG code
+        crs = CRS.from_user_input(crs_string)
+        epsg_code = crs.to_epsg()
+        if epsg_code:
+            return f"EPSG:{epsg_code}"
+        # If no EPSG code, try to get authority code
+        if crs.to_authority():
+            auth_name, code = crs.to_authority()
+            if auth_name and code:
+                return f"{auth_name.upper()}:{code}"
+        # Fallback to string representation
+        return crs_string
+    except Exception as exc:
+        LOGGER.warning("Failed to normalize CRS '%s': %s", crs_string, exc)
+        # If it already looks like EPSG:XXXX, return as is
+        if isinstance(crs_string, str) and crs_string.upper().startswith("EPSG:"):
+            return crs_string.upper()
+        return None
 
 
 async def _persist_upload(file: UploadFile) -> Path:
@@ -151,6 +192,171 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
             response.text,
         )
         raise HTTPException(status_code=response.status_code, detail=response.text)
+
+    # Wait a moment for GeoServer to process the shapefile and read the .prj file
+    await asyncio.sleep(1)
+
+    # Update feature type with correct SRS from metadata
+    try:
+        # Normalize CRS to EPSG format
+        normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
+        if normalized_crs:
+            LOGGER.info("Updating feature type SRS for layer %s to %s", store_name, normalized_crs)
+            
+            # Get the actual feature type name from the store
+            # When uploading a shapefile, GeoServer creates a feature type with the shapefile name
+            # We need to list feature types in the store to find the correct name
+            feature_type_name = store_name  # Default to store name
+            
+            try:
+                # List feature types in the datastore to find the actual feature type name
+                ft_list_response = geo_admin_service.list_datastore_tables(
+                    workspace=GEOSERVER_WORKSPACE,
+                    datastore=store_name,
+                )
+                
+                if ft_list_response.status_code == 200:
+                    ft_list_data = ft_list_response.json()
+                    feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
+                    
+                    if feature_types:
+                        # Use the first feature type (should be the one we just uploaded)
+                        if isinstance(feature_types, list) and len(feature_types) > 0:
+                            feature_type_name = feature_types[0].get("name", store_name)
+                        elif isinstance(feature_types, dict):
+                            feature_type_name = feature_types.get("name", store_name)
+                        LOGGER.info("Found feature type name: %s for store: %s", feature_type_name, store_name)
+            except Exception as list_exc:
+                LOGGER.warning("Could not list feature types for store %s: %s. Using store name as feature type name.", store_name, list_exc)
+            
+            # Get current feature type configuration
+            ft_response = geo_admin_service.get_feature_type_details(
+                workspace=GEOSERVER_WORKSPACE,
+                datastore=store_name,
+                feature_type=feature_type_name,
+            )
+            
+            if ft_response.status_code == 200:
+                ft_config = ft_response.json()
+                feature_type = ft_config.get("featureType", {})
+                
+                # Get the native SRS that GeoServer read from the .prj file (if any)
+                current_native_srs = feature_type.get("nativeSRS")
+                if not current_native_srs:
+                    current_native_srs = feature_type.get("srs")
+                
+                LOGGER.info("Current native SRS from GeoServer: %s, Our normalized CRS: %s", current_native_srs, normalized_crs)
+                
+                # GeoServer's REST API requires XML format to set nativeCRS (not nativeSRS)
+                # Use XML format with nativeCRS to set the native SRS
+                # Reference: https://terrestris.github.io/momo3-ws/en/geoserver/advanced/rest/update.html
+                
+                # Check if nativeSRS needs to be set
+                needs_fix = not current_native_srs or current_native_srs != normalized_crs
+                
+                if needs_fix:
+                    LOGGER.info("Setting native SRS using XML format with nativeCRS...")
+                    
+                    # Use XML format to set nativeCRS
+                    xml_data = f"""<featureType>
+  <enabled>{str(feature_type.get("enabled", True)).lower()}</enabled>
+  <nativeCRS>{normalized_crs}</nativeCRS>
+  <srs>{normalized_crs}</srs>
+  <projectionPolicy>FORCE_DECLARED</projectionPolicy>
+</featureType>"""
+                    
+                    # Update using XML format
+                    update_url = f"{geo_admin_dao.base_url}/workspaces/{GEOSERVER_WORKSPACE}/datastores/{store_name}/featuretypes/{feature_type_name}"
+                    update_headers = {"Content-type": "text/xml"}
+                    xml_update_response = requests.put(
+                        update_url,
+                        auth=geo_admin_dao.auth,
+                        data=xml_data,
+                        headers=update_headers,
+                    )
+                    
+                    if xml_update_response.status_code in (200, 201):
+                        LOGGER.info("Successfully set nativeCRS to %s using XML format", normalized_crs)
+                        await asyncio.sleep(0.5)
+                        
+                        # Recalculate bounding boxes
+                        recalc_xml = f"""<featureType>
+  <enabled>{str(feature_type.get("enabled", True)).lower()}</enabled>
+</featureType>"""
+                        recalc_url = f"{update_url}?recalculate=nativebbox,latlonbbox"
+                        recalc_response = requests.put(
+                            recalc_url,
+                            auth=geo_admin_dao.auth,
+                            data=recalc_xml,
+                            headers=update_headers,
+                        )
+                        
+                        if recalc_response.status_code in (200, 201):
+                            LOGGER.info("Successfully recalculated bounding boxes")
+                        else:
+                            LOGGER.warning("Bounding box recalculation failed: %s", recalc_response.text)
+                    else:
+                        LOGGER.error("Failed to set nativeCRS via XML: %s", xml_update_response.text)
+                        # Fall back to JSON update (which won't set nativeSRS but will set declared SRS)
+                        update_response = geo_admin_service.update_feature_type(
+                            workspace=GEOSERVER_WORKSPACE,
+                            datastore=store_name,
+                            feature_type=feature_type_name,
+                            config={
+                                "featureType": {
+                                    "name": feature_type_name,
+                                    "nativeName": feature_type.get("nativeName", feature_type_name),
+                                    "srs": normalized_crs,
+                                    "projectionPolicy": "FORCE_DECLARED",
+                                    "enabled": feature_type.get("enabled", True),
+                                }
+                            },
+                            recalculate=True,
+                        )
+                else:
+                    # Native SRS is already correct, just update declared SRS
+                    LOGGER.info("Native SRS is already correct. Updating declared SRS only...")
+                    update_response = geo_admin_service.update_feature_type(
+                        workspace=GEOSERVER_WORKSPACE,
+                        datastore=store_name,
+                        feature_type=feature_type_name,
+                        config={
+                            "featureType": {
+                                "name": feature_type_name,
+                                "nativeName": feature_type.get("nativeName", feature_type_name),
+                                "srs": normalized_crs,
+                                "projectionPolicy": "FORCE_DECLARED",
+                                "enabled": feature_type.get("enabled", True),
+                            }
+                        },
+                        recalculate=True,
+                    )
+                    
+                    if update_response.status_code not in (200, 201):
+                        LOGGER.warning(
+                            "Failed to update SRS for feature type %s: status %s, response: %s",
+                            feature_type_name,
+                            update_response.status_code,
+                            update_response.text,
+                        )
+            else:
+                LOGGER.warning(
+                    "Could not get feature type details for %s in store %s: status %s, response: %s",
+                    feature_type_name,
+                    store_name,
+                    ft_response.status_code,
+                    ft_response.text,
+                )
+        else:
+            LOGGER.warning("Could not normalize CRS '%s' for layer %s, skipping SRS update", upload_log.crs, store_name)
+    except Exception as exc:
+        LOGGER.error(
+            "Error updating SRS for layer %s: %s. Continuing with database update.",
+            store_name,
+            exc,
+            exc_info=True,
+        )
+        # Don't fail the whole operation if SRS update fails
 
     try:
         db_record = UploadLogDAO.get_by_id(upload_log.id, db)
