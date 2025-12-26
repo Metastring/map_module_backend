@@ -140,6 +140,65 @@ async def upload_dataset(
     return created_log
 
 
+async def _wait_for_feature_type_ready(store_name: str, max_wait_seconds: int = 30, poll_interval: float = 1.0) -> None:
+    """
+    Poll GeoServer to wait for a feature type to become available in the datastore.
+    
+    This is necessary when GeoServer returns 202 (Accepted) or when processing
+    takes time, especially in staging/production environments with higher load.
+    
+    Args:
+        store_name: Name of the datastore to check
+        max_wait_seconds: Maximum time to wait in seconds
+        poll_interval: Time between polls in seconds
+    """
+    max_attempts = int(max_wait_seconds / poll_interval)
+    attempt = 0
+    
+    while attempt < max_attempts:
+        try:
+            # List feature types in the datastore to check if any are available
+            ft_list_response = geo_admin_service.list_datastore_tables(
+                workspace=GEOSERVER_WORKSPACE,
+                datastore=store_name,
+            )
+            
+            if ft_list_response.status_code == 200:
+                ft_list_data = ft_list_response.json()
+                feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
+                
+                if feature_types:
+                    # Feature type is available
+                    if isinstance(feature_types, list) and len(feature_types) > 0:
+                        feature_type_name = feature_types[0].get("name", store_name)
+                    elif isinstance(feature_types, dict):
+                        feature_type_name = feature_types.get("name", store_name)
+                    else:
+                        feature_type_name = store_name
+                    
+                    LOGGER.info("Feature type %s is now available in store %s", feature_type_name, store_name)
+                    return
+            
+            # Feature type not ready yet, wait and retry
+            attempt += 1
+            if attempt < max_attempts:
+                LOGGER.debug("Feature type not ready yet for store %s, waiting... (attempt %d/%d)", store_name, attempt, max_attempts)
+                await asyncio.sleep(poll_interval)
+        except Exception as exc:
+            LOGGER.warning("Error checking feature type availability for store %s: %s. Retrying...", store_name, exc)
+            attempt += 1
+            if attempt < max_attempts:
+                await asyncio.sleep(poll_interval)
+    
+    # If we get here, we've exhausted all attempts
+    LOGGER.warning(
+        "Feature type for store %s did not become available within %d seconds. "
+        "Proceeding anyway, but SRS update may fail.",
+        store_name,
+        max_wait_seconds
+    )
+
+
 async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
     if not upload_log.file_format or upload_log.file_format.lower() != "shp":
         return
@@ -184,7 +243,13 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
         if hasattr(upload_file.file, "closed") and not upload_file.file.closed:
             upload_file.file.close()
 
-    if response.status_code not in (200, 201):
+    # Handle different response codes
+    if response.status_code == 202:
+        # 202 Accepted means GeoServer is still processing the upload asynchronously
+        # We need to wait and poll for the feature type to become available
+        LOGGER.info("GeoServer returned 202 (Accepted) for layer %s. Waiting for processing to complete...", store_name)
+        await _wait_for_feature_type_ready(store_name, max_wait_seconds=30)
+    elif response.status_code not in (200, 201):
         LOGGER.error(
             "GeoServer upload failed for layer %s with status %s: %s",
             store_name,
@@ -192,9 +257,10 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
             response.text,
         )
         raise HTTPException(status_code=response.status_code, detail=response.text)
-
-    # Wait a moment for GeoServer to process the shapefile and read the .prj file
-    await asyncio.sleep(1)
+    else:
+        # 200/201 means upload succeeded, but we still need to wait for processing
+        LOGGER.info("GeoServer returned %s for layer %s. Waiting for feature type to be ready...", response.status_code, store_name)
+        await _wait_for_feature_type_ready(store_name, max_wait_seconds=15)
 
     # Update feature type with correct SRS from metadata
     try:
