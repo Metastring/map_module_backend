@@ -327,6 +327,52 @@ class GeoServerAdminDAO:
         )
         return response
 
+    def create_feature_type_from_shapefile(
+        self,
+        workspace: str,
+        datastore: str,
+        feature_type_name: str,
+        native_name: str = None,
+        enabled: bool = True,
+        srs: str = None
+    ):
+        """
+        Create a feature type from a shapefile datastore.
+        This is used when GeoServer doesn't automatically create the feature type after shapefile upload.
+        
+        Args:
+            workspace: Workspace name
+            datastore: Datastore name (usually the store name used during upload)
+            feature_type_name: Name for the feature type (usually the shapefile name without .shp)
+            native_name: Native name of the shapefile (defaults to feature_type_name)
+            enabled: Whether the feature type should be enabled
+            srs: Optional SRS code (e.g., "EPSG:4326")
+        """
+        url = (
+            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        )
+        headers = {"Content-type": "application/json"}
+
+        if not native_name:
+            native_name = feature_type_name
+
+        feature_type_config = {
+            "featureType": {
+                "name": feature_type_name,
+                "nativeName": native_name,
+                "enabled": enabled
+            }
+        }
+
+        if srs:
+            feature_type_config["featureType"]["srs"] = srs
+            feature_type_config["featureType"]["projectionPolicy"] = "FORCE_DECLARED"
+
+        response = requests.post(
+            url, auth=self.auth, json=feature_type_config, headers=headers
+        )
+        return response
+
     def get_table_details(self, workspace: str, datastore: str, table_name: str):
         """
         Get details of a specific table in a datastore.

@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import os
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
@@ -69,6 +71,30 @@ def _normalize_crs_to_epsg(crs_string: Optional[str]) -> Optional[str]:
         if isinstance(crs_string, str) and crs_string.upper().startswith("EPSG:"):
             return crs_string.upper()
         return None
+
+
+def _extract_shapefile_name(file_path: Path) -> str:
+    """
+    Extract the shapefile name from a file path.
+    For .zip files, looks for .shp files inside and returns the base name.
+    For .shp files, returns the base name without extension.
+    """
+    if file_path.suffix.lower() == '.zip':
+        try:
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                # Find the first .shp file in the zip
+                for name in zip_ref.namelist():
+                    if name.lower().endswith('.shp'):
+                        # Get the base name without .shp extension
+                        return Path(name).stem
+        except Exception as exc:
+            LOGGER.warning("Could not extract shapefile name from zip %s: %s. Using file stem.", file_path, exc)
+            return file_path.stem
+    elif file_path.suffix.lower() == '.shp':
+        return file_path.stem
+    
+    # Fallback to file stem
+    return file_path.stem
 
 
 async def _persist_upload(file: UploadFile) -> Path:
@@ -187,16 +213,27 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
     # Give GeoServer a moment to process the upload (especially for async 202 responses)
     if response.status_code == 202:
         LOGGER.info("GeoServer returned 202 (Accepted), upload is being processed asynchronously")
+        # Wait a bit for async processing
+        await asyncio.sleep(2)
+    
+    # Extract the actual shapefile name from the uploaded file
+    # This is important because GeoServer uses the shapefile name, not the store name
+    shapefile_name = _extract_shapefile_name(file_path)
+    LOGGER.info("Extracted shapefile name: %s from file: %s", shapefile_name, file_path)
     
     # Try to find the actual feature type name that was created
     # GeoServer might use the shapefile name from inside the zip, not the store name
-    actual_feature_type_name = store_name
+    actual_feature_type_name = shapefile_name
+    feature_type_exists = False
+    
     try:
         # List feature types in the datastore to find what was actually created
         ft_list_response = geo_admin_service.list_datastore_tables(
             workspace=GEOSERVER_WORKSPACE,
             datastore=store_name,
         )
+        LOGGER.info("Feature type list response status: %s", ft_list_response.status_code)
+        
         if ft_list_response.status_code == 200:
             ft_list_data = ft_list_response.json()
             if isinstance(ft_list_data, dict):
@@ -205,40 +242,101 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
                     feature_types = feature_types_obj.get("featureType", [])
                     if feature_types:
                         if isinstance(feature_types, list) and len(feature_types) > 0:
-                            actual_feature_type_name = feature_types[0].get("name", store_name) if isinstance(feature_types[0], dict) else store_name
+                            actual_feature_type_name = feature_types[0].get("name", shapefile_name) if isinstance(feature_types[0], dict) else shapefile_name
+                            feature_type_exists = True
                         elif isinstance(feature_types, dict):
-                            actual_feature_type_name = feature_types.get("name", store_name)
-                        LOGGER.info("Found feature type name: %s (store: %s)", actual_feature_type_name, store_name)
+                            actual_feature_type_name = feature_types.get("name", shapefile_name)
+                            feature_type_exists = True
+                        LOGGER.info("Found existing feature type name: %s (store: %s)", actual_feature_type_name, store_name)
+                    else:
+                        LOGGER.warning("No feature types found in datastore %s after upload", store_name)
+                else:
+                    LOGGER.warning("Unexpected feature types structure in response")
+            else:
+                LOGGER.warning("Unexpected response format when listing feature types")
+        else:
+            LOGGER.warning("Failed to list feature types: status %s, response: %s", 
+                          ft_list_response.status_code, ft_list_response.text[:200] if ft_list_response.text else "No response")
     except Exception as list_exc:
-        LOGGER.debug("Could not list feature types to find actual name: %s. Using store name.", list_exc)
+        LOGGER.warning("Could not list feature types to find actual name: %s. Will try to create feature type explicitly.", list_exc)
+    
+    # If feature type doesn't exist, create it explicitly
+    if not feature_type_exists:
+        LOGGER.info("Feature type does not exist, creating it explicitly: workspace=%s, datastore=%s, feature_type=%s", 
+                   GEOSERVER_WORKSPACE, store_name, shapefile_name)
+        try:
+            normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
+            create_response = geo_admin_service.create_feature_type_from_shapefile(
+                workspace=GEOSERVER_WORKSPACE,
+                datastore=store_name,
+                feature_type_name=shapefile_name,
+                native_name=shapefile_name,
+                enabled=True,
+                srs=normalized_crs
+            )
+            
+            if create_response.status_code in (200, 201):
+                LOGGER.info("Successfully created feature type %s in datastore %s", shapefile_name, store_name)
+                actual_feature_type_name = shapefile_name
+                feature_type_exists = True
+            elif create_response.status_code == 409:
+                # Feature type already exists (race condition)
+                LOGGER.info("Feature type %s already exists (status 409), continuing", shapefile_name)
+                actual_feature_type_name = shapefile_name
+                feature_type_exists = True
+            else:
+                LOGGER.error("Failed to create feature type %s: status %s, response: %s", 
+                           shapefile_name, create_response.status_code, 
+                           create_response.text[:500] if create_response.text else "No response")
+                # Don't fail the whole operation, but log the error
+        except Exception as create_exc:
+            LOGGER.error("Exception while creating feature type %s: %s", shapefile_name, create_exc, exc_info=True)
+            # Continue anyway - maybe it was created but we couldn't detect it
 
     # Update feature type with correct SRS from metadata if available
+    # Only do this if the feature type exists
+    if feature_type_exists:
+        try:
+            normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
+            if normalized_crs:
+                # Try to update SRS using the actual feature type name
+                try:
+                    update_response = geo_admin_service.update_feature_type(
+                        workspace=GEOSERVER_WORKSPACE,
+                        datastore=store_name,
+                        feature_type=actual_feature_type_name,
+                        config={
+                            "featureType": {
+                                "name": actual_feature_type_name,
+                                "srs": normalized_crs,
+                                "projectionPolicy": "FORCE_DECLARED",
+                            }
+                        },
+                        recalculate=True,
+                    )
+                    if update_response.status_code in (200, 201):
+                        LOGGER.info("Successfully updated SRS for feature type %s to %s", actual_feature_type_name, normalized_crs)
+                    else:
+                        LOGGER.warning("SRS update returned status %s for layer %s: %s", 
+                                     update_response.status_code, actual_feature_type_name,
+                                     update_response.text[:200] if update_response.text else "No response")
+                except Exception as srs_exc:
+                    LOGGER.warning("Could not update SRS for layer %s: %s", actual_feature_type_name, srs_exc)
+        except Exception as exc:
+            LOGGER.warning("Error updating SRS for layer %s: %s. Continuing.", store_name, exc)
+    else:
+        LOGGER.warning("Skipping SRS update because feature type does not exist")
+    
+    # Verify that the layer is actually published and accessible
+    layer_full_name = f"{GEOSERVER_WORKSPACE}:{actual_feature_type_name}"
     try:
-        normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
-        if normalized_crs:
-            # Try to update SRS using the actual feature type name
-            try:
-                update_response = geo_admin_service.update_feature_type(
-                    workspace=GEOSERVER_WORKSPACE,
-                    datastore=store_name,
-                    feature_type=actual_feature_type_name,
-                    config={
-                        "featureType": {
-                            "name": actual_feature_type_name,
-                            "srs": normalized_crs,
-                            "projectionPolicy": "FORCE_DECLARED",
-                        }
-                    },
-                    recalculate=True,
-                )
-                if update_response.status_code in (200, 201):
-                    LOGGER.info("Successfully updated SRS for feature type %s to %s", actual_feature_type_name, normalized_crs)
-                else:
-                    LOGGER.debug("SRS update returned status %s for layer %s", update_response.status_code, actual_feature_type_name)
-            except Exception as srs_exc:
-                LOGGER.debug("Could not update SRS for layer %s: %s", actual_feature_type_name, srs_exc)
-    except Exception as exc:
-        LOGGER.debug("Error updating SRS for layer %s: %s. Continuing.", store_name, exc)
+        layer_response = geo_admin_service.get_layer_details(layer_full_name)
+        if layer_response.status_code == 200:
+            LOGGER.info("Layer %s is published and accessible", layer_full_name)
+        else:
+            LOGGER.warning("Layer %s may not be fully published (status %s)", layer_full_name, layer_response.status_code)
+    except Exception as layer_check_exc:
+        LOGGER.warning("Could not verify layer publication for %s: %s", layer_full_name, layer_check_exc)
 
     try:
         db_record = UploadLogDAO.get_by_id(upload_log.id, db)

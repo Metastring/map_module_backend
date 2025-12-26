@@ -196,6 +196,29 @@ class GeoServerAdminService:
             raise ValueError("Feature type name is required.")
         return self.dao.update_feature_type(workspace, datastore, feature_type, config, recalculate=recalculate)
 
+    def create_feature_type_from_shapefile(
+        self,
+        workspace: str,
+        datastore: str,
+        feature_type_name: str,
+        native_name: str = None,
+        enabled: bool = True,
+        srs: str = None
+    ):
+        """
+        Create a feature type from a shapefile datastore.
+        This is used when GeoServer doesn't automatically create the feature type after shapefile upload.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        if not feature_type_name:
+            raise ValueError("Feature type name is required.")
+        return self.dao.create_feature_type_from_shapefile(
+            workspace, datastore, feature_type_name, native_name, enabled, srs
+        )
+
     def configure_layer_tile_caching(
         self,
         workspace: str,
