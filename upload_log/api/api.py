@@ -164,20 +164,43 @@ async def _wait_for_feature_type_ready(store_name: str, max_wait_seconds: int = 
             )
             
             if ft_list_response.status_code == 200:
-                ft_list_data = ft_list_response.json()
-                feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
-                
-                if feature_types:
-                    # Feature type is available
-                    if isinstance(feature_types, list) and len(feature_types) > 0:
-                        feature_type_name = feature_types[0].get("name", store_name)
-                    elif isinstance(feature_types, dict):
-                        feature_type_name = feature_types.get("name", store_name)
-                    else:
-                        feature_type_name = store_name
+                try:
+                    ft_list_data = ft_list_response.json()
+                    # Ensure ft_list_data is a dict, not a string
+                    if isinstance(ft_list_data, str):
+                        LOGGER.warning("GeoServer returned string instead of JSON for store %s: %s", store_name, ft_list_data[:200])
+                        attempt += 1
+                        if attempt < max_attempts:
+                            await asyncio.sleep(poll_interval)
+                        continue
+                    if not isinstance(ft_list_data, dict):
+                        LOGGER.warning("GeoServer returned unexpected type %s for store %s: %s", type(ft_list_data), store_name, str(ft_list_data)[:200])
+                        attempt += 1
+                        if attempt < max_attempts:
+                            await asyncio.sleep(poll_interval)
+                        continue
+                    feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
                     
-                    LOGGER.info("Feature type %s is now available in store %s", feature_type_name, store_name)
-                    return
+                    if feature_types:
+                        # Feature type is available
+                        if isinstance(feature_types, list) and len(feature_types) > 0:
+                            feature_type_name = feature_types[0].get("name", store_name)
+                        elif isinstance(feature_types, dict):
+                            feature_type_name = feature_types.get("name", store_name)
+                        else:
+                            feature_type_name = store_name
+                        
+                        LOGGER.info("Feature type %s is now available in store %s", feature_type_name, store_name)
+                        return
+                except (ValueError, AttributeError, TypeError) as json_error:
+                    LOGGER.warning("Failed to parse JSON response for store %s: %s. Response text: %s", store_name, json_error, ft_list_response.text[:200] if hasattr(ft_list_response, 'text') else 'No response text')
+                    attempt += 1
+                    if attempt < max_attempts:
+                        await asyncio.sleep(poll_interval)
+                    continue
+            else:
+                # Status code is not 200
+                LOGGER.debug("Feature type list returned status %d for store %s: %s", ft_list_response.status_code, store_name, ft_list_response.text[:200] if hasattr(ft_list_response, 'text') else 'No response text')
             
             # Feature type not ready yet, wait and retry
             attempt += 1
@@ -282,8 +305,29 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
                 )
                 
                 if ft_list_response.status_code == 200:
-                    ft_list_data = ft_list_response.json()
-                    feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
+                    try:
+                        ft_list_data = ft_list_response.json()
+                        # Ensure ft_list_data is a dict, not a string
+                        if isinstance(ft_list_data, str):
+                            LOGGER.warning("GeoServer returned string instead of JSON for store %s: %s", store_name, ft_list_data[:200])
+                            feature_type_name = store_name
+                        elif not isinstance(ft_list_data, dict):
+                            LOGGER.warning("GeoServer returned unexpected type %s for store %s", type(ft_list_data), store_name)
+                            feature_type_name = store_name
+                        else:
+                            feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
+                            if feature_types:
+                                # Use the first feature type (should be the one we just uploaded)
+                                if isinstance(feature_types, list) and len(feature_types) > 0:
+                                    feature_type_name = feature_types[0].get("name", store_name)
+                                elif isinstance(feature_types, dict):
+                                    feature_type_name = feature_types.get("name", store_name)
+                                LOGGER.info("Found feature type name: %s for store: %s", feature_type_name, store_name)
+                            else:
+                                feature_type_name = store_name
+                    except (ValueError, AttributeError, TypeError) as json_error:
+                        LOGGER.warning("Failed to parse JSON response for store %s: %s. Response text: %s", store_name, json_error, ft_list_response.text[:200] if hasattr(ft_list_response, 'text') else 'No response text')
+                        feature_type_name = store_name
                     
                     if feature_types:
                         # Use the first feature type (should be the one we just uploaded)

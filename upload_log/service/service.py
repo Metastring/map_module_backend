@@ -353,6 +353,7 @@ class UploadLogService:
                     response = await geo_service.upload_postgis(postgis_request)
                     
                     if response.status_code in [200, 201]:
+                        logger.info(f"PostGIS datastore '{final_store_name}' created successfully with status {response.status_code}")
                         # Create layer from table using admin service
                         layer_request = CreateLayerRequest(
                             workspace=workspace,
@@ -369,15 +370,37 @@ class UploadLogService:
                         )
                         admin_service = GeoServerAdminService(admin_dao)
                         
-                        logger.info(f"Creating layer '{table_name}' from table '{table_name}'")
+                        logger.info(f"Creating layer '{table_name}' from table '{table_name}' in store '{final_store_name}'")
                         layer_response = await admin_service.create_layer_from_table(layer_request)
                         
+                        logger.info(f"Layer creation response status: {layer_response.status_code}, response: {layer_response.text[:500] if layer_response.text else 'No response text'}")
+                        
                         if layer_response.status_code in [200, 201]:
-                            geoserver_message = f" Successfully uploaded to GeoServer workspace '{workspace}' as layer '{table_name}'."
+                            # Verify the layer was actually created by checking if feature type exists
+                            import asyncio
+                            await asyncio.sleep(1)  # Give GeoServer a moment to process
+                            
+                            try:
+                                verify_response = admin_dao.get_table_details(
+                                    workspace=workspace,
+                                    datastore=final_store_name,
+                                    table_name=table_name
+                                )
+                                if verify_response.status_code == 200:
+                                    logger.info(f"Verified: Feature type '{table_name}' exists in store '{final_store_name}'")
+                                    geoserver_message = f" Successfully uploaded to GeoServer workspace '{workspace}' as layer '{table_name}'."
+                                else:
+                                    logger.warning(f"Layer creation returned {layer_response.status_code} but verification failed (status {verify_response.status_code}): {verify_response.text[:200]}")
+                                    geoserver_message = f" Layer creation returned success but verification failed. Status: {layer_response.status_code}, Verify: {verify_response.status_code}"
+                            except Exception as verify_error:
+                                logger.warning(f"Could not verify layer creation: {verify_error}")
+                                geoserver_message = f" Layer creation returned success (status {layer_response.status_code}) but verification failed: {str(verify_error)}"
                         else:
-                            geoserver_message = f" PostGIS datastore created but layer creation failed: {layer_response.text}"
+                            geoserver_message = f" PostGIS datastore created but layer creation failed (status {layer_response.status_code}): {layer_response.text[:200]}"
+                            logger.error(f"Layer creation failed: status {layer_response.status_code}, response: {layer_response.text}")
                     else:
-                        geoserver_message = f" GeoServer upload failed: {response.text}"
+                        geoserver_message = f" GeoServer upload failed (status {response.status_code}): {response.text[:200]}"
+                        logger.error(f"PostGIS datastore creation failed: status {response.status_code}, response: {response.text}")
                 except Exception as geoserver_error:
                     logger.error(f"Error uploading to GeoServer: {geoserver_error}")
                     geoserver_message = f" GeoServer upload encountered an error: {str(geoserver_error)}"

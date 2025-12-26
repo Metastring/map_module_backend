@@ -147,11 +147,13 @@ class GeoServerDAO:
 
     def list_layers(self):
         url = f"{self.base_url}/layers.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def get_layer_details(self, layer: str):
         url = f"{self.base_url}/layers/{layer}.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
 
     def get_tile_layer_url(self, layer: str):

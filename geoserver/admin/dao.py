@@ -14,19 +14,23 @@ class GeoServerAdminDAO:
 
     def list_workspaces(self):
         url = f"{self.base_url}/workspaces.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def get_workspace_details(self, workspace: str):
         url = f"{self.base_url}/workspaces/{workspace}.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def list_datastores(self, workspace: str):
         url = f"{self.base_url}/workspaces/{workspace}/datastores.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def get_datastore_details(self, workspace: str, datastore: str):
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def delete_workspace(self, workspace: str):
         """
@@ -93,7 +97,8 @@ class GeoServerAdminDAO:
         List all available tables in a PostGIS datastore.
         """
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def list_postgis_schema_tables(
         self, workspace: str, datastore: str, schema: str = "public"
@@ -106,7 +111,8 @@ class GeoServerAdminDAO:
         datastore_url = (
             f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}.json"
         )
-        datastore_response = requests.get(datastore_url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        datastore_response = requests.get(datastore_url, auth=self.auth, headers=headers)
 
         if datastore_response.status_code != 200:
             raise Exception(f"Failed to get datastore details: {datastore_response.text}")
@@ -175,7 +181,8 @@ class GeoServerAdminDAO:
                 f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
                 f"featuretypes/schema_tables_{schema}.json"
             )
-            data_response = requests.get(data_url, auth=self.auth)
+            headers = {"Accept": "application/json"}
+            data_response = requests.get(data_url, auth=self.auth, headers=headers)
 
             # Clean up the temporary SQL view
             delete_url = (
@@ -260,7 +267,8 @@ class GeoServerAdminDAO:
                     f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
                     f"featuretypes/temp_schema_tables_{schema}.json"
                 )
-                data_response = requests.get(data_url, auth=self.auth)
+                headers = {"Accept": "application/json"}
+                data_response = requests.get(data_url, auth=self.auth, headers=headers)
 
                 # Return the response with table information
                 return data_response
@@ -327,7 +335,8 @@ class GeoServerAdminDAO:
             f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/"
             f"featuretypes/{table_name}.json"
         )
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def create_workspace(self, workspace_name: str):
         """
@@ -343,28 +352,32 @@ class GeoServerAdminDAO:
         Get details of a specific layer.
         """
         url = f"{self.base_url}/layers/{layer}.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def list_styles(self):
         """
         List all styles in GeoServer.
         """
         url = f"{self.base_url}/styles.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def get_style_details(self, style_name: str):
         """
         Get details of a specific style.
         """
         url = f"{self.base_url}/styles/{style_name}.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def get_feature_type_details(self, workspace: str, datastore: str, feature_type: str):
         """
         Get details of a specific feature type (table/layer resource).
         """
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{feature_type}.json"
-        return requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/json"}
+        return requests.get(url, auth=self.auth, headers=headers)
 
     def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict, recalculate: bool = False):
         """
@@ -406,7 +419,8 @@ class GeoServerAdminDAO:
         url = f"{self.base_url}/gwc/rest/layers/{workspace}:{layer_name}.xml"
         
         # Get existing configuration first
-        get_response = requests.get(url, auth=self.auth)
+        headers = {"Accept": "application/xml"}
+        get_response = requests.get(url, auth=self.auth, headers=headers)
         
         if get_response.status_code != 200:
             # If layer doesn't exist in GWC, create a new configuration
