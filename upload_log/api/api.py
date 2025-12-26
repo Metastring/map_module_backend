@@ -1,13 +1,11 @@
 import logging
 import os
-import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4, UUID
 
 import aiofiles
-import requests
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy.orm import Session
 
@@ -140,101 +138,9 @@ async def upload_dataset(
     return created_log
 
 
-async def _wait_for_feature_type_ready(store_name: str, max_wait_seconds: int = 30, poll_interval: float = 1.0) -> None:
-    """
-    Poll GeoServer to wait for a feature type to become available in the datastore.
-    
-    This is necessary when GeoServer returns 202 (Accepted) or when processing
-    takes time, especially in staging/production environments with higher load.
-    
-    Args:
-        store_name: Name of the datastore to check
-        max_wait_seconds: Maximum time to wait in seconds
-        poll_interval: Time between polls in seconds
-    """
-    max_attempts = int(max_wait_seconds / poll_interval)
-    attempt = 0
-    
-    while attempt < max_attempts:
-        try:
-            # List feature types in the datastore to check if any are available
-            ft_list_response = geo_admin_service.list_datastore_tables(
-                workspace=GEOSERVER_WORKSPACE,
-                datastore=store_name,
-            )
-            
-            if ft_list_response.status_code == 200:
-                try:
-                    ft_list_data = ft_list_response.json()
-                    # Ensure ft_list_data is a dict, not a string
-                    if isinstance(ft_list_data, str):
-                        LOGGER.warning("GeoServer returned string instead of JSON for store %s: %s", store_name, ft_list_data[:200])
-                        attempt += 1
-                        if attempt < max_attempts:
-                            await asyncio.sleep(poll_interval)
-                        continue
-                    if not isinstance(ft_list_data, dict):
-                        LOGGER.warning("GeoServer returned unexpected type %s for store %s: %s", type(ft_list_data), store_name, str(ft_list_data)[:200])
-                        attempt += 1
-                        if attempt < max_attempts:
-                            await asyncio.sleep(poll_interval)
-                        continue
-                    
-                    # Safe access with proper type checking
-                    feature_types = None
-                    if isinstance(ft_list_data, dict):
-                        feature_types_obj = ft_list_data.get("featureTypes")
-                        if isinstance(feature_types_obj, dict):
-                            feature_types = feature_types_obj.get("featureType", [])
-                        elif feature_types_obj is None:
-                            feature_types = []
-                        else:
-                            LOGGER.warning("Unexpected type for featureTypes in store %s: %s", store_name, type(feature_types_obj))
-                            feature_types = []
-                    
-                    if feature_types:
-                        # Feature type is available
-                        if isinstance(feature_types, list) and len(feature_types) > 0:
-                            feature_type_name = feature_types[0].get("name", store_name) if isinstance(feature_types[0], dict) else store_name
-                        elif isinstance(feature_types, dict):
-                            feature_type_name = feature_types.get("name", store_name)
-                        else:
-                            feature_type_name = store_name
-                        
-                        LOGGER.info("Feature type %s is now available in store %s", feature_type_name, store_name)
-                        return
-                except (ValueError, AttributeError, TypeError) as json_error:
-                    LOGGER.warning("Failed to parse JSON response for store %s: %s. Response text: %s", store_name, json_error, ft_list_response.text[:200] if hasattr(ft_list_response, 'text') else 'No response text')
-                    attempt += 1
-                    if attempt < max_attempts:
-                        await asyncio.sleep(poll_interval)
-                    continue
-            else:
-                # Status code is not 200
-                LOGGER.debug("Feature type list returned status %d for store %s: %s", ft_list_response.status_code, store_name, ft_list_response.text[:200] if hasattr(ft_list_response, 'text') else 'No response text')
-            
-            # Feature type not ready yet, wait and retry
-            attempt += 1
-            if attempt < max_attempts:
-                LOGGER.debug("Feature type not ready yet for store %s, waiting... (attempt %d/%d)", store_name, attempt, max_attempts)
-                await asyncio.sleep(poll_interval)
-        except Exception as exc:
-            LOGGER.warning("Error checking feature type availability for store %s: %s. Retrying...", store_name, exc)
-            attempt += 1
-            if attempt < max_attempts:
-                await asyncio.sleep(poll_interval)
-    
-    # If we get here, we've exhausted all attempts
-    LOGGER.warning(
-        "Feature type for store %s did not become available within %d seconds. "
-        "Proceeding anyway, but SRS update may fail.",
-        store_name,
-        max_wait_seconds
-    )
-
-
 async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
     if not upload_log.file_format or upload_log.file_format.lower() != "shp":
+        LOGGER.info("Skipping GeoServer publication for file format: %s", upload_log.file_format)
         return
 
     file_path = Path(upload_log.source_path)
@@ -246,24 +152,17 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
         )
 
     store_name = upload_log.layer_name
+    LOGGER.info("Publishing to GeoServer: workspace=%s, store=%s, file=%s, file_format=%s", 
+                GEOSERVER_WORKSPACE, store_name, file_path, upload_log.file_format)
+    
+    # Upload directly using the persisted file path (works for both .zip and .shp files)
     try:
-        file_handle = file_path.open("rb")
-    except OSError as exc:
-        LOGGER.error("Failed to open stored upload for GeoServer publication: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Unable to open stored upload file for GeoServer.",
-        ) from exc
-
-    upload_file = SimpleNamespace(file=file_handle, filename=file_path.name)
-
-    try:
-        response = await geo_service.upload_resource(
+        response = geo_dao.upload_shapefile(
             workspace=GEOSERVER_WORKSPACE,
             store_name=store_name,
-            resource_type="shapefile",
-            file=upload_file,
+            file_path=os.fspath(file_path),
         )
+        LOGGER.info("GeoServer upload response: status=%s, text=%s", response.status_code, response.text[:200] if response.text else "No response text")
     except ValueError as exc:
         LOGGER.error("GeoServer rejected upload for layer %s: %s", store_name, exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -273,17 +172,8 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Unexpected error occurred while publishing to GeoServer.",
         ) from exc
-    finally:
-        if hasattr(upload_file.file, "closed") and not upload_file.file.closed:
-            upload_file.file.close()
 
-    # Handle different response codes
-    if response.status_code == 202:
-        # 202 Accepted means GeoServer is still processing the upload asynchronously
-        # We need to wait and poll for the feature type to become available
-        LOGGER.info("GeoServer returned 202 (Accepted) for layer %s. Waiting for processing to complete...", store_name)
-        await _wait_for_feature_type_ready(store_name, max_wait_seconds=30)
-    elif response.status_code not in (200, 201):
+    if response.status_code not in (200, 201, 202):
         LOGGER.error(
             "GeoServer upload failed for layer %s with status %s: %s",
             store_name,
@@ -291,198 +181,64 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
             response.text,
         )
         raise HTTPException(status_code=response.status_code, detail=response.text)
-    else:
-        # 200/201 means upload succeeded, but we still need to wait for processing
-        LOGGER.info("GeoServer returned %s for layer %s. Waiting for feature type to be ready...", response.status_code, store_name)
-        await _wait_for_feature_type_ready(store_name, max_wait_seconds=15)
-
-    # Update feature type with correct SRS from metadata
+    
+    LOGGER.info("GeoServer upload succeeded for layer %s (status %s)", store_name, response.status_code)
+    
+    # Give GeoServer a moment to process the upload (especially for async 202 responses)
+    if response.status_code == 202:
+        LOGGER.info("GeoServer returned 202 (Accepted), upload is being processed asynchronously")
+    
+    # Try to find the actual feature type name that was created
+    # GeoServer might use the shapefile name from inside the zip, not the store name
+    actual_feature_type_name = store_name
     try:
-        # Normalize CRS to EPSG format
+        # List feature types in the datastore to find what was actually created
+        ft_list_response = geo_admin_service.list_datastore_tables(
+            workspace=GEOSERVER_WORKSPACE,
+            datastore=store_name,
+        )
+        if ft_list_response.status_code == 200:
+            ft_list_data = ft_list_response.json()
+            if isinstance(ft_list_data, dict):
+                feature_types_obj = ft_list_data.get("featureTypes", {})
+                if isinstance(feature_types_obj, dict):
+                    feature_types = feature_types_obj.get("featureType", [])
+                    if feature_types:
+                        if isinstance(feature_types, list) and len(feature_types) > 0:
+                            actual_feature_type_name = feature_types[0].get("name", store_name) if isinstance(feature_types[0], dict) else store_name
+                        elif isinstance(feature_types, dict):
+                            actual_feature_type_name = feature_types.get("name", store_name)
+                        LOGGER.info("Found feature type name: %s (store: %s)", actual_feature_type_name, store_name)
+    except Exception as list_exc:
+        LOGGER.debug("Could not list feature types to find actual name: %s. Using store name.", list_exc)
+
+    # Update feature type with correct SRS from metadata if available
+    try:
         normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
         if normalized_crs:
-            LOGGER.info("Updating feature type SRS for layer %s to %s", store_name, normalized_crs)
-            
-            # Get the actual feature type name from the store
-            # When uploading a shapefile, GeoServer creates a feature type with the shapefile name
-            # We need to list feature types in the store to find the correct name
-            feature_type_name = store_name  # Default to store name
-            
+            # Try to update SRS using the actual feature type name
             try:
-                # List feature types in the datastore to find the actual feature type name
-                ft_list_response = geo_admin_service.list_datastore_tables(
+                update_response = geo_admin_service.update_feature_type(
                     workspace=GEOSERVER_WORKSPACE,
                     datastore=store_name,
+                    feature_type=actual_feature_type_name,
+                    config={
+                        "featureType": {
+                            "name": actual_feature_type_name,
+                            "srs": normalized_crs,
+                            "projectionPolicy": "FORCE_DECLARED",
+                        }
+                    },
+                    recalculate=True,
                 )
-                
-                if ft_list_response.status_code == 200:
-                    try:
-                        ft_list_data = ft_list_response.json()
-                        # Ensure ft_list_data is a dict, not a string
-                        if isinstance(ft_list_data, str):
-                            LOGGER.warning("GeoServer returned string instead of JSON for store %s: %s", store_name, ft_list_data[:200])
-                            feature_type_name = store_name
-                        elif not isinstance(ft_list_data, dict):
-                            LOGGER.warning("GeoServer returned unexpected type %s for store %s", type(ft_list_data), store_name)
-                            feature_type_name = store_name
-                        else:
-                            # Safe access with proper type checking
-                            feature_types = None
-                            if isinstance(ft_list_data, dict):
-                                feature_types_obj = ft_list_data.get("featureTypes")
-                                if isinstance(feature_types_obj, dict):
-                                    feature_types = feature_types_obj.get("featureType", [])
-                                elif feature_types_obj is None:
-                                    feature_types = []
-                                else:
-                                    LOGGER.warning("Unexpected type for featureTypes in store %s: %s", store_name, type(feature_types_obj))
-                                    feature_types = []
-                            
-                            if feature_types:
-                                # Use the first feature type (should be the one we just uploaded)
-                                if isinstance(feature_types, list) and len(feature_types) > 0:
-                                    feature_type_name = feature_types[0].get("name", store_name) if isinstance(feature_types[0], dict) else store_name
-                                elif isinstance(feature_types, dict):
-                                    feature_type_name = feature_types.get("name", store_name)
-                                else:
-                                    feature_type_name = store_name
-                                LOGGER.info("Found feature type name: %s for store: %s", feature_type_name, store_name)
-                            else:
-                                feature_type_name = store_name
-                    except (ValueError, AttributeError, TypeError) as json_error:
-                        LOGGER.warning("Failed to parse JSON response for store %s: %s. Response text: %s", store_name, json_error, ft_list_response.text[:200] if hasattr(ft_list_response, 'text') else 'No response text')
-                        feature_type_name = store_name
-            except Exception as list_exc:
-                LOGGER.warning("Could not list feature types for store %s: %s. Using store name as feature type name.", store_name, list_exc)
-            
-            # Get current feature type configuration
-            ft_response = geo_admin_service.get_feature_type_details(
-                workspace=GEOSERVER_WORKSPACE,
-                datastore=store_name,
-                feature_type=feature_type_name,
-            )
-            
-            if ft_response.status_code == 200:
-                ft_config = ft_response.json()
-                feature_type = ft_config.get("featureType", {})
-                
-                # Get the native SRS that GeoServer read from the .prj file (if any)
-                current_native_srs = feature_type.get("nativeSRS")
-                if not current_native_srs:
-                    current_native_srs = feature_type.get("srs")
-                
-                LOGGER.info("Current native SRS from GeoServer: %s, Our normalized CRS: %s", current_native_srs, normalized_crs)
-                
-                # GeoServer's REST API requires XML format to set nativeCRS (not nativeSRS)
-                # Use XML format with nativeCRS to set the native SRS
-                # Reference: https://terrestris.github.io/momo3-ws/en/geoserver/advanced/rest/update.html
-                
-                # Check if nativeSRS needs to be set
-                needs_fix = not current_native_srs or current_native_srs != normalized_crs
-                
-                if needs_fix:
-                    LOGGER.info("Setting native SRS using XML format with nativeCRS...")
-                    
-                    # Use XML format to set nativeCRS
-                    xml_data = f"""<featureType>
-  <enabled>{str(feature_type.get("enabled", True)).lower()}</enabled>
-  <nativeCRS>{normalized_crs}</nativeCRS>
-  <srs>{normalized_crs}</srs>
-  <projectionPolicy>FORCE_DECLARED</projectionPolicy>
-</featureType>"""
-                    
-                    # Update using XML format
-                    update_url = f"{geo_admin_dao.base_url}/workspaces/{GEOSERVER_WORKSPACE}/datastores/{store_name}/featuretypes/{feature_type_name}"
-                    update_headers = {"Content-type": "text/xml"}
-                    xml_update_response = requests.put(
-                        update_url,
-                        auth=geo_admin_dao.auth,
-                        data=xml_data,
-                        headers=update_headers,
-                    )
-                    
-                    if xml_update_response.status_code in (200, 201):
-                        LOGGER.info("Successfully set nativeCRS to %s using XML format", normalized_crs)
-                        await asyncio.sleep(0.5)
-                        
-                        # Recalculate bounding boxes
-                        recalc_xml = f"""<featureType>
-  <enabled>{str(feature_type.get("enabled", True)).lower()}</enabled>
-</featureType>"""
-                        recalc_url = f"{update_url}?recalculate=nativebbox,latlonbbox"
-                        recalc_response = requests.put(
-                            recalc_url,
-                            auth=geo_admin_dao.auth,
-                            data=recalc_xml,
-                            headers=update_headers,
-                        )
-                        
-                        if recalc_response.status_code in (200, 201):
-                            LOGGER.info("Successfully recalculated bounding boxes")
-                        else:
-                            LOGGER.warning("Bounding box recalculation failed: %s", recalc_response.text)
-                    else:
-                        LOGGER.error("Failed to set nativeCRS via XML: %s", xml_update_response.text)
-                        # Fall back to JSON update (which won't set nativeSRS but will set declared SRS)
-                        update_response = geo_admin_service.update_feature_type(
-                            workspace=GEOSERVER_WORKSPACE,
-                            datastore=store_name,
-                            feature_type=feature_type_name,
-                            config={
-                                "featureType": {
-                                    "name": feature_type_name,
-                                    "nativeName": feature_type.get("nativeName", feature_type_name),
-                                    "srs": normalized_crs,
-                                    "projectionPolicy": "FORCE_DECLARED",
-                                    "enabled": feature_type.get("enabled", True),
-                                }
-                            },
-                            recalculate=True,
-                        )
+                if update_response.status_code in (200, 201):
+                    LOGGER.info("Successfully updated SRS for feature type %s to %s", actual_feature_type_name, normalized_crs)
                 else:
-                    # Native SRS is already correct, just update declared SRS
-                    LOGGER.info("Native SRS is already correct. Updating declared SRS only...")
-                    update_response = geo_admin_service.update_feature_type(
-                        workspace=GEOSERVER_WORKSPACE,
-                        datastore=store_name,
-                        feature_type=feature_type_name,
-                        config={
-                            "featureType": {
-                                "name": feature_type_name,
-                                "nativeName": feature_type.get("nativeName", feature_type_name),
-                                "srs": normalized_crs,
-                                "projectionPolicy": "FORCE_DECLARED",
-                                "enabled": feature_type.get("enabled", True),
-                            }
-                        },
-                        recalculate=True,
-                    )
-                    
-                    if update_response.status_code not in (200, 201):
-                        LOGGER.warning(
-                            "Failed to update SRS for feature type %s: status %s, response: %s",
-                            feature_type_name,
-                            update_response.status_code,
-                            update_response.text,
-                        )
-            else:
-                LOGGER.warning(
-                    "Could not get feature type details for %s in store %s: status %s, response: %s",
-                    feature_type_name,
-                    store_name,
-                    ft_response.status_code,
-                    ft_response.text,
-                )
-        else:
-            LOGGER.warning("Could not normalize CRS '%s' for layer %s, skipping SRS update", upload_log.crs, store_name)
+                    LOGGER.debug("SRS update returned status %s for layer %s", update_response.status_code, actual_feature_type_name)
+            except Exception as srs_exc:
+                LOGGER.debug("Could not update SRS for layer %s: %s", actual_feature_type_name, srs_exc)
     except Exception as exc:
-        LOGGER.error(
-            "Error updating SRS for layer %s: %s. Continuing with database update.",
-            store_name,
-            exc,
-            exc_info=True,
-        )
-        # Don't fail the whole operation if SRS update fails
+        LOGGER.debug("Error updating SRS for layer %s: %s. Continuing.", store_name, exc)
 
     try:
         db_record = UploadLogDAO.get_by_id(upload_log.id, db)
