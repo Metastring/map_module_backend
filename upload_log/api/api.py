@@ -179,12 +179,23 @@ async def _wait_for_feature_type_ready(store_name: str, max_wait_seconds: int = 
                         if attempt < max_attempts:
                             await asyncio.sleep(poll_interval)
                         continue
-                    feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
+                    
+                    # Safe access with proper type checking
+                    feature_types = None
+                    if isinstance(ft_list_data, dict):
+                        feature_types_obj = ft_list_data.get("featureTypes")
+                        if isinstance(feature_types_obj, dict):
+                            feature_types = feature_types_obj.get("featureType", [])
+                        elif feature_types_obj is None:
+                            feature_types = []
+                        else:
+                            LOGGER.warning("Unexpected type for featureTypes in store %s: %s", store_name, type(feature_types_obj))
+                            feature_types = []
                     
                     if feature_types:
                         # Feature type is available
                         if isinstance(feature_types, list) and len(feature_types) > 0:
-                            feature_type_name = feature_types[0].get("name", store_name)
+                            feature_type_name = feature_types[0].get("name", store_name) if isinstance(feature_types[0], dict) else store_name
                         elif isinstance(feature_types, dict):
                             feature_type_name = feature_types.get("name", store_name)
                         else:
@@ -315,27 +326,32 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
                             LOGGER.warning("GeoServer returned unexpected type %s for store %s", type(ft_list_data), store_name)
                             feature_type_name = store_name
                         else:
-                            feature_types = ft_list_data.get("featureTypes", {}).get("featureType", [])
+                            # Safe access with proper type checking
+                            feature_types = None
+                            if isinstance(ft_list_data, dict):
+                                feature_types_obj = ft_list_data.get("featureTypes")
+                                if isinstance(feature_types_obj, dict):
+                                    feature_types = feature_types_obj.get("featureType", [])
+                                elif feature_types_obj is None:
+                                    feature_types = []
+                                else:
+                                    LOGGER.warning("Unexpected type for featureTypes in store %s: %s", store_name, type(feature_types_obj))
+                                    feature_types = []
+                            
                             if feature_types:
                                 # Use the first feature type (should be the one we just uploaded)
                                 if isinstance(feature_types, list) and len(feature_types) > 0:
-                                    feature_type_name = feature_types[0].get("name", store_name)
+                                    feature_type_name = feature_types[0].get("name", store_name) if isinstance(feature_types[0], dict) else store_name
                                 elif isinstance(feature_types, dict):
                                     feature_type_name = feature_types.get("name", store_name)
+                                else:
+                                    feature_type_name = store_name
                                 LOGGER.info("Found feature type name: %s for store: %s", feature_type_name, store_name)
                             else:
                                 feature_type_name = store_name
                     except (ValueError, AttributeError, TypeError) as json_error:
                         LOGGER.warning("Failed to parse JSON response for store %s: %s. Response text: %s", store_name, json_error, ft_list_response.text[:200] if hasattr(ft_list_response, 'text') else 'No response text')
                         feature_type_name = store_name
-                    
-                    if feature_types:
-                        # Use the first feature type (should be the one we just uploaded)
-                        if isinstance(feature_types, list) and len(feature_types) > 0:
-                            feature_type_name = feature_types[0].get("name", store_name)
-                        elif isinstance(feature_types, dict):
-                            feature_type_name = feature_types.get("name", store_name)
-                        LOGGER.info("Found feature type name: %s for store: %s", feature_type_name, store_name)
             except Exception as list_exc:
                 LOGGER.warning("Could not list feature types for store %s: %s. Using store name as feature type name.", store_name, list_exc)
             
