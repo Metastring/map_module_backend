@@ -22,7 +22,6 @@ from geoserver.admin.service import GeoServerAdminService
 from upload_log.dao.dao import UploadLogDAO
 from utils.config import geoserver_host, geoserver_port, geoserver_username, geoserver_password
 from types import SimpleNamespace
-from pyproj import CRS
 
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
@@ -42,35 +41,6 @@ geo_admin_dao = GeoServerAdminDAO(
     password=geoserver_password,
 )
 geo_admin_service = GeoServerAdminService(geo_admin_dao)
-
-
-def _normalize_crs_to_epsg(crs_string: Optional[str]) -> Optional[str]:
-    """
-    Normalize CRS string to EPSG format (e.g., 'EPSG:4326').
-    Returns None if CRS cannot be determined.
-    """
-    if not crs_string:
-        return None
-    
-    try:
-        # Try to parse the CRS and get EPSG code
-        crs = CRS.from_user_input(crs_string)
-        epsg_code = crs.to_epsg()
-        if epsg_code:
-            return f"EPSG:{epsg_code}"
-        # If no EPSG code, try to get authority code
-        if crs.to_authority():
-            auth_name, code = crs.to_authority()
-            if auth_name and code:
-                return f"{auth_name.upper()}:{code}"
-        # Fallback to string representation
-        return crs_string
-    except Exception as exc:
-        LOGGER.warning("Failed to normalize CRS '%s': %s", crs_string, exc)
-        # If it already looks like EPSG:XXXX, return as is
-        if isinstance(crs_string, str) and crs_string.upper().startswith("EPSG:"):
-            return crs_string.upper()
-        return None
 
 
 def _extract_shapefile_name(file_path: Path) -> str:
@@ -323,8 +293,6 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
             LOGGER.info("CRITICAL: Feature type not auto-created. Attempting explicit creation: workspace=%s, datastore=%s, shapefile=%s", 
                        GEOSERVER_WORKSPACE, store_name, shapefile_name)
             
-            normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
-            
             # For shapefiles, use file.shp endpoint with configure=all
             # This uploads the shapefile AND creates the feature type with discovered attributes
             try:
@@ -396,40 +364,6 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
                        f"The shapefile was uploaded but the layer was not published. "
                        f"Please check GeoServer logs for details."
             )
-
-    # Update feature type with correct SRS from metadata if available
-    # Only do this if the feature type exists
-    if feature_type_exists:
-        try:
-            normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
-            if normalized_crs:
-                # Try to update SRS using the actual feature type name
-                try:
-                    update_response = geo_admin_service.update_feature_type(
-                        workspace=GEOSERVER_WORKSPACE,
-                        datastore=store_name,
-                        feature_type=actual_feature_type_name,
-                        config={
-                            "featureType": {
-                                "name": actual_feature_type_name,
-                                "srs": normalized_crs,
-                                "projectionPolicy": "FORCE_DECLARED",
-                            }
-                        },
-                        recalculate=True,
-                    )
-                    if update_response.status_code in (200, 201):
-                        LOGGER.info("Successfully updated SRS for feature type %s to %s", actual_feature_type_name, normalized_crs)
-                    else:
-                        LOGGER.warning("SRS update returned status %s for layer %s: %s", 
-                                     update_response.status_code, actual_feature_type_name,
-                                     update_response.text[:200] if update_response.text else "No response")
-                except Exception as srs_exc:
-                    LOGGER.warning("Could not update SRS for layer %s: %s", actual_feature_type_name, srs_exc)
-        except Exception as exc:
-            LOGGER.warning("Error updating SRS for layer %s: %s. Continuing.", store_name, exc)
-    else:
-        LOGGER.warning("Skipping SRS update because feature type does not exist")
     
     # Verify that the layer is actually published and accessible
     layer_full_name = f"{GEOSERVER_WORKSPACE}:{actual_feature_type_name}"
