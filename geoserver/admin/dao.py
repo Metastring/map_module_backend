@@ -32,6 +32,16 @@ class GeoServerAdminDAO:
         headers = {"Accept": "application/json"}
         return requests.get(url, auth=self.auth, headers=headers)
 
+    def reload_datastore(self, workspace: str, datastore: str):
+        """
+        Reload a datastore to trigger GeoServer to re-scan for new shapefiles
+        and auto-create feature types. This is useful when shapefiles are uploaded
+        but feature types aren't automatically created.
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/reload"
+        headers = {"Accept": "application/json"}
+        return requests.post(url, auth=self.auth, headers=headers)
+
     def delete_workspace(self, workspace: str):
         """
         Delete a workspace.

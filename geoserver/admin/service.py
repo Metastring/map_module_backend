@@ -29,6 +29,17 @@ class GeoServerAdminService:
     def get_datastore_details(self, workspace: str, datastore: str):
         return self.dao.get_datastore_details(workspace, datastore)
 
+    def reload_datastore(self, workspace: str, datastore: str):
+        """
+        Reload a datastore to trigger GeoServer to re-scan for new shapefiles
+        and auto-create feature types.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        return self.dao.reload_datastore(workspace, datastore)
+
     def delete_workspace(self, workspace: str):
         """
         Delete a workspace.

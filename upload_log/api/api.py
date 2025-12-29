@@ -260,38 +260,56 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
     except Exception as list_exc:
         LOGGER.warning("Could not list feature types to find actual name: %s. Will try to create feature type explicitly.", list_exc)
     
-    # If feature type doesn't exist, create it explicitly
+    # If feature type doesn't exist, try to reload the datastore first
+    # This will make GeoServer re-scan for shapefiles and auto-create feature types
     if not feature_type_exists:
-        LOGGER.info("Feature type does not exist, creating it explicitly: workspace=%s, datastore=%s, feature_type=%s", 
-                   GEOSERVER_WORKSPACE, store_name, shapefile_name)
+        LOGGER.info("Feature type does not exist, attempting to reload datastore: workspace=%s, datastore=%s", 
+                   GEOSERVER_WORKSPACE, store_name)
         try:
-            normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
-            create_response = geo_admin_service.create_feature_type_from_shapefile(
+            reload_response = geo_admin_service.reload_datastore(
                 workspace=GEOSERVER_WORKSPACE,
-                datastore=store_name,
-                feature_type_name=shapefile_name,
-                native_name=shapefile_name,
-                enabled=True,
-                srs=normalized_crs
+                datastore=store_name
             )
-            
-            if create_response.status_code in (200, 201):
-                LOGGER.info("Successfully created feature type %s in datastore %s", shapefile_name, store_name)
-                actual_feature_type_name = shapefile_name
-                feature_type_exists = True
-            elif create_response.status_code == 409:
-                # Feature type already exists (race condition)
-                LOGGER.info("Feature type %s already exists (status 409), continuing", shapefile_name)
-                actual_feature_type_name = shapefile_name
-                feature_type_exists = True
+            if reload_response.status_code in (200, 201, 204):
+                LOGGER.info("Successfully reloaded datastore %s, waiting for feature type discovery", store_name)
+                # Wait a moment for GeoServer to process the reload
+                await asyncio.sleep(2)
+                
+                # Check again if feature type was created after reload
+                try:
+                    ft_list_response_after_reload = geo_admin_service.list_datastore_tables(
+                        workspace=GEOSERVER_WORKSPACE,
+                        datastore=store_name,
+                    )
+                    if ft_list_response_after_reload.status_code == 200:
+                        ft_list_data = ft_list_response_after_reload.json()
+                        if isinstance(ft_list_data, dict):
+                            feature_types_obj = ft_list_data.get("featureTypes", {})
+                            if isinstance(feature_types_obj, dict):
+                                feature_types = feature_types_obj.get("featureType", [])
+                                if feature_types:
+                                    if isinstance(feature_types, list) and len(feature_types) > 0:
+                                        actual_feature_type_name = feature_types[0].get("name", shapefile_name) if isinstance(feature_types[0], dict) else shapefile_name
+                                        feature_type_exists = True
+                                        LOGGER.info("Feature type %s found after datastore reload", actual_feature_type_name)
+                except Exception as check_exc:
+                    LOGGER.warning("Could not verify feature type after reload: %s", check_exc)
             else:
-                LOGGER.error("Failed to create feature type %s: status %s, response: %s", 
-                           shapefile_name, create_response.status_code, 
-                           create_response.text[:500] if create_response.text else "No response")
-                # Don't fail the whole operation, but log the error
-        except Exception as create_exc:
-            LOGGER.error("Exception while creating feature type %s: %s", shapefile_name, create_exc, exc_info=True)
-            # Continue anyway - maybe it was created but we couldn't detect it
+                LOGGER.warning("Datastore reload returned status %s: %s", 
+                             reload_response.status_code, 
+                             reload_response.text[:200] if reload_response.text else "No response")
+        except Exception as reload_exc:
+            LOGGER.warning("Could not reload datastore %s: %s", store_name, reload_exc)
+        
+        # If still no feature type exists after reload, log a warning
+        # The configure=all parameter in upload_shapefile should have created it,
+        # but if it didn't, we'll just log it and continue
+        if not feature_type_exists:
+            LOGGER.warning(
+                "Feature type %s was not automatically created in datastore %s. "
+                "The layer may not be accessible. Check GeoServer logs for details.",
+                shapefile_name, store_name
+            )
 
     # Update feature type with correct SRS from metadata if available
     # Only do this if the feature type exists

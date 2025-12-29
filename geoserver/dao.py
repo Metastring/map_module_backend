@@ -73,8 +73,11 @@ class GeoServerDAO:
             )
 
         try:
+            # Add configure=all parameter to auto-create feature type and layer
+            # Options: 'all' (create feature type + layer), 'first' (first feature type only), 'none' (no auto-creation)
+            params = {"configure": "all"}
             with open(upload_path, "rb") as f:
-                response = requests.put(url, auth=self.auth, data=f, headers=headers)
+                response = requests.put(url, auth=self.auth, data=f, headers=headers, params=params)
         finally:
             if cleanup_path and os.path.exists(cleanup_path):
                 os.remove(cleanup_path)
