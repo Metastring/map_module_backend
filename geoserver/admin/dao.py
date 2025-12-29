@@ -347,45 +347,27 @@ class GeoServerAdminDAO:
         srs: str = None
     ):
         """
-        Create a feature type from a shapefile datastore.
-        For shapefiles, we use the nativeName to let GeoServer auto-discover attributes.
-        This is used when GeoServer doesn't automatically create the feature type after shapefile upload.
-        
-        Args:
-            workspace: Workspace name
-            datastore: Datastore name (usually the store name used during upload)
-            feature_type_name: Name for the feature type (usually the shapefile name without .shp)
-            native_name: Native name of the shapefile (defaults to feature_type_name)
-            enabled: Whether the feature type should be enabled
-            srs: Optional SRS code (e.g., "EPSG:4326")
+        Create a feature type from a shapefile datastore using external.shp endpoint.
+        This references the shapefile that's already uploaded to the datastore.
         """
-        url = (
-            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
-        )
-        headers = {"Content-type": "application/json"}
-
         if not native_name:
             native_name = feature_type_name
 
-        # For shapefile datastores, we need to specify nativeName and let GeoServer
-        # auto-discover the attributes. We can also add configure=all as a query param
-        # to trigger automatic attribute discovery.
-        params = {"configure": "all"}
-        
-        feature_type_config = {
-            "featureType": {
-                "name": feature_type_name,
-                "nativeName": native_name,
-                "enabled": enabled
-            }
+        # Use external.shp endpoint to reference the already-uploaded shapefile
+        # This tells GeoServer to use the shapefile that's in the datastore directory
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/external.shp"
+        headers = {"Content-type": "text/plain"}
+        params = {
+            "configure": "all",
+            "update": "overwrite"
         }
-
-        if srs:
-            feature_type_config["featureType"]["srs"] = srs
-            feature_type_config["featureType"]["projectionPolicy"] = "FORCE_DECLARED"
-
-        response = requests.post(
-            url, auth=self.auth, json=feature_type_config, headers=headers, params=params
+        
+        # The external.shp endpoint expects the shapefile path/name
+        # Format: file://shapefile_name.shp or just shapefile_name.shp
+        external_path = f"{native_name}.shp"
+        
+        response = requests.put(
+            url, auth=self.auth, data=external_path, headers=headers, params=params
         )
         return response
     

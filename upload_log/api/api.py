@@ -332,23 +332,43 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
                     srs=normalized_crs
                 )
                 
-                LOGGER.info("Feature type creation response: status=%s, text=%s", 
-                           create_response.status_code,
-                           create_response.text[:500] if create_response.text else "No response")
+                LOGGER.info("Feature type creation response: status=%s", create_response.status_code)
+                if create_response.text:
+                    LOGGER.info("Response text (first 500 chars): %s", create_response.text[:500])
                 
-                if create_response.status_code in (200, 201):
-                    LOGGER.info("SUCCESS: Created feature type %s using POST method", shapefile_name)
+                if create_response.status_code in (200, 201, 202):
+                    LOGGER.info("SUCCESS: Created feature type %s using external.shp method", shapefile_name)
                     actual_feature_type_name = shapefile_name
                     feature_type_exists = True
-                    await asyncio.sleep(2)  # Wait for GeoServer to process
+                    await asyncio.sleep(3)  # Wait for GeoServer to process
+                    
+                    # Verify it was created
+                    try:
+                        ft_verify = geo_admin_service.list_datastore_tables(
+                            workspace=GEOSERVER_WORKSPACE,
+                            datastore=store_name,
+                        )
+                        if ft_verify.status_code == 200:
+                            ft_data = ft_verify.json()
+                            if isinstance(ft_data, dict):
+                                ft_obj = ft_data.get("featureTypes", {})
+                                if isinstance(ft_obj, dict):
+                                    fts = ft_obj.get("featureType", [])
+                                    if fts:
+                                        LOGGER.info("SUCCESS: Feature type verified after creation")
+                                    else:
+                                        LOGGER.warning("Feature type created but not yet visible in list")
+                    except Exception as verify_exc:
+                        LOGGER.warning("Could not verify feature type: %s", verify_exc)
+                        
                 elif create_response.status_code == 409:
                     LOGGER.info("Feature type %s already exists (409)", shapefile_name)
                     actual_feature_type_name = shapefile_name
                     feature_type_exists = True
                 else:
-                    LOGGER.warning("POST method failed (status %s). Response: %s", 
+                    LOGGER.error("external.shp method failed (status %s). Full response: %s", 
                                  create_response.status_code,
-                                 create_response.text[:500] if create_response.text else "No response")
+                                 create_response.text[:1000] if create_response.text else "No response")
                     
                     # Method 2: Try re-uploading with configure=all
                     if not feature_type_exists:
