@@ -1,6 +1,8 @@
 import os
 import sys
 import logging
+import tempfile
+import shutil
 from typing import List, Dict, Optional
 from urllib.parse import urlencode
 import requests
@@ -29,6 +31,72 @@ geo_dao = GeoServerDAO(
     password=geoserver_password
 )
 geo_service = GeoServerService(geo_dao)
+
+@router.post("/upload-simple", summary="Simple Shapefile Upload", description="A simple API endpoint to upload a shapefile (.zip or .shp) to GeoServer. Just provide the file and optionally specify workspace and store name.")
+async def upload_shapefile_simple(
+    file: UploadFile = File(..., description="The shapefile to upload (.zip or .shp file)"),
+    workspace: str = Form("metastring", description="Target workspace name in GeoServer (default: 'metastring')"),
+    store_name: str = Form(None, description="Name of the datastore (default: uses filename without extension)")
+):
+    """
+    Simple endpoint to upload a shapefile to GeoServer.
+    Accepts either a .zip file containing the shapefile components or a .shp file
+    (with accompanying .shx, .dbf files in the same directory).
+    """
+    try:
+        # Validate file type
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No file provided")
+        
+        file_ext = os.path.splitext(file.filename)[1].lower()
+        if file_ext not in ['.zip', '.shp']:
+            raise HTTPException(
+                status_code=400, 
+                detail="File must be a .zip or .shp file"
+            )
+        
+        # Use filename as store_name if not provided
+        if not store_name:
+            store_name = os.path.splitext(file.filename)[0]
+        
+        # Save uploaded file temporarily
+        suffix = file_ext
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            shutil.copyfileobj(file.file, tmp)
+            tmp_path = tmp.name
+        
+        try:
+            # Upload to GeoServer using DAO directly
+            response = geo_dao.upload_shapefile(workspace, store_name, tmp_path)
+            
+            if response.status_code in [200, 201]:
+                return {
+                    "message": "Shapefile uploaded successfully!",
+                    "status_code": response.status_code,
+                    "workspace": workspace,
+                    "store_name": store_name
+                }
+            else:
+                raise HTTPException(
+                    status_code=response.status_code, 
+                    detail=f"GeoServer upload failed: {response.text}"
+                )
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+            file.file.close()
+            
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Error uploading shapefile: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 @router.post("/upload", summary="Upload Shapefile/Resource (Used for internal api calls)", description="Upload a shapefile or other resource to GeoServer. This API is used to upload shapefiles (as ZIP archives) to GeoServer. The shapefile must be in a ZIP format containing all required components (.shp, .shx, .dbf, etc.).")
 async def upload_resource(
