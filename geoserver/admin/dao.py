@@ -347,27 +347,32 @@ class GeoServerAdminDAO:
         srs: str = None
     ):
         """
-        Create a feature type from a shapefile datastore using external.shp endpoint.
-        This references the shapefile that's already uploaded to the datastore.
+        Create a feature type from a shapefile datastore.
+        The shapefile must already be uploaded to the datastore directory.
+        Uses the standard feature type creation endpoint with nativeName matching the shapefile name.
         """
         if not native_name:
             native_name = feature_type_name
 
-        # Use external.shp endpoint to reference the already-uploaded shapefile
-        # This tells GeoServer to use the shapefile that's in the datastore directory
-        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/external.shp"
-        headers = {"Content-type": "text/plain"}
-        params = {
-            "configure": "all",
-            "update": "overwrite"
+        # Use standard feature type creation endpoint (same as create_layer_from_table)
+        # For shapefiles, nativeName should match the shapefile name (without .shp extension)
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        headers = {"Content-type": "application/json"}
+        
+        feature_type_config = {
+            "featureType": {
+                "name": feature_type_name,
+                "nativeName": native_name,  # This should match the shapefile name (without .shp)
+                "enabled": enabled
+            }
         }
         
-        # The external.shp endpoint expects the shapefile path/name
-        # Format: file://shapefile_name.shp or just shapefile_name.shp
-        external_path = f"{native_name}.shp"
+        if srs:
+            feature_type_config["featureType"]["srs"] = srs
+            feature_type_config["featureType"]["projectionPolicy"] = "FORCE_DECLARED"
         
-        response = requests.put(
-            url, auth=self.auth, data=external_path, headers=headers, params=params
+        response = requests.post(
+            url, auth=self.auth, json=feature_type_config, headers=headers
         )
         return response
     
