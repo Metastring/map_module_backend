@@ -229,6 +229,26 @@ class GeoServerAdminService:
         return self.dao.create_feature_type_from_shapefile(
             workspace, datastore, feature_type_name, native_name, enabled, srs
         )
+    
+    def create_feature_type_from_shapefile_via_file_endpoint(
+        self,
+        workspace: str,
+        datastore: str,
+        shapefile_name: str,
+        file_path: str
+    ):
+        """
+        Alternative method: Re-upload shapefile with configure=all to force feature type creation.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        if not file_path:
+            raise ValueError("File path is required.")
+        return self.dao.create_feature_type_from_shapefile_via_file_endpoint(
+            workspace, datastore, shapefile_name, file_path
+        )
 
     def configure_layer_tile_caching(
         self,

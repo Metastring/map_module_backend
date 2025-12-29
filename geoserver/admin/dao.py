@@ -348,6 +348,7 @@ class GeoServerAdminDAO:
     ):
         """
         Create a feature type from a shapefile datastore.
+        For shapefiles, we use the nativeName to let GeoServer auto-discover attributes.
         This is used when GeoServer doesn't automatically create the feature type after shapefile upload.
         
         Args:
@@ -366,6 +367,11 @@ class GeoServerAdminDAO:
         if not native_name:
             native_name = feature_type_name
 
+        # For shapefile datastores, we need to specify nativeName and let GeoServer
+        # auto-discover the attributes. We can also add configure=all as a query param
+        # to trigger automatic attribute discovery.
+        params = {"configure": "all"}
+        
         feature_type_config = {
             "featureType": {
                 "name": feature_type_name,
@@ -379,8 +385,74 @@ class GeoServerAdminDAO:
             feature_type_config["featureType"]["projectionPolicy"] = "FORCE_DECLARED"
 
         response = requests.post(
-            url, auth=self.auth, json=feature_type_config, headers=headers
+            url, auth=self.auth, json=feature_type_config, headers=headers, params=params
         )
+        return response
+    
+    def create_feature_type_from_shapefile_via_file_endpoint(
+        self,
+        workspace: str,
+        datastore: str,
+        shapefile_name: str,
+        file_path: str
+    ):
+        """
+        Alternative method: Create feature type by re-uploading the shapefile
+        with configure=all parameter. This forces GeoServer to create the feature type.
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/file.shp"
+        headers = {"Content-type": "application/zip"}
+        params = {"configure": "all", "update": "overwrite"}
+        
+        import zipfile
+        import tempfile
+        import os
+        
+        # Ensure we have a zip file
+        cleanup_path = None
+        upload_path = file_path
+        
+        if not file_path.lower().endswith('.zip'):
+            # Create a zip from the shapefile components
+            base_name, _ = os.path.splitext(file_path)
+            directory = os.path.dirname(file_path) or "."
+            basename_only = os.path.basename(base_name)
+            basename_lower = basename_only.lower()
+            
+            required_extensions = ['.shp', '.shx', '.dbf']
+            matching_files = []
+            available_extensions = set()
+            for filename in os.listdir(directory):
+                file_full_path = os.path.join(directory, filename)
+                if not os.path.isfile(file_full_path):
+                    continue
+                name_root, ext = os.path.splitext(filename)
+                if name_root.lower() == basename_lower and ext.lower() != '.zip':
+                    matching_files.append(filename)
+                    available_extensions.add(ext.lower())
+            
+            if all(ext in available_extensions for ext in required_extensions):
+                fd, temp_zip_path = tempfile.mkstemp(suffix=".zip")
+                os.close(fd)
+                try:
+                    with zipfile.ZipFile(temp_zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                        for filename in matching_files:
+                            file_to_add = os.path.join(directory, filename)
+                            zipf.write(file_to_add, arcname=filename)
+                    upload_path = temp_zip_path
+                    cleanup_path = temp_zip_path
+                except Exception:
+                    if os.path.exists(temp_zip_path):
+                        os.remove(temp_zip_path)
+                    raise
+        
+        try:
+            with open(upload_path, "rb") as f:
+                response = requests.put(url, auth=self.auth, data=f, headers=headers, params=params)
+        finally:
+            if cleanup_path and os.path.exists(cleanup_path):
+                os.remove(cleanup_path)
+        
         return response
 
     def get_table_details(self, workspace: str, datastore: str, table_name: str):
