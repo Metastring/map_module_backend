@@ -216,6 +216,9 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
         # Wait a bit for async processing
         await asyncio.sleep(2)
     
+    # Wait a moment for GeoServer to process the upload
+    await asyncio.sleep(3)
+    
     # Extract the actual shapefile name from the uploaded file
     # This is important because GeoServer uses the shapefile name, not the store name
     shapefile_name = _extract_shapefile_name(file_path)
@@ -226,39 +229,48 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
     actual_feature_type_name = shapefile_name
     feature_type_exists = False
     
-    try:
-        # List feature types in the datastore to find what was actually created
-        ft_list_response = geo_admin_service.list_datastore_tables(
-            workspace=GEOSERVER_WORKSPACE,
-            datastore=store_name,
-        )
-        LOGGER.info("Feature type list response status: %s", ft_list_response.status_code)
-        
-        if ft_list_response.status_code == 200:
-            ft_list_data = ft_list_response.json()
-            if isinstance(ft_list_data, dict):
-                feature_types_obj = ft_list_data.get("featureTypes", {})
-                if isinstance(feature_types_obj, dict):
-                    feature_types = feature_types_obj.get("featureType", [])
-                    if feature_types:
-                        if isinstance(feature_types, list) and len(feature_types) > 0:
-                            actual_feature_type_name = feature_types[0].get("name", shapefile_name) if isinstance(feature_types[0], dict) else shapefile_name
-                            feature_type_exists = True
-                        elif isinstance(feature_types, dict):
-                            actual_feature_type_name = feature_types.get("name", shapefile_name)
-                            feature_type_exists = True
-                        LOGGER.info("Found existing feature type name: %s (store: %s)", actual_feature_type_name, store_name)
+    # Try multiple times to find the feature type (GeoServer might need time to process)
+    for attempt in range(3):
+        try:
+            # List feature types in the datastore to find what was actually created
+            ft_list_response = geo_admin_service.list_datastore_tables(
+                workspace=GEOSERVER_WORKSPACE,
+                datastore=store_name,
+            )
+            LOGGER.info("Feature type list attempt %d: status=%s", attempt + 1, ft_list_response.status_code)
+            
+            if ft_list_response.status_code == 200:
+                ft_list_data = ft_list_response.json()
+                if isinstance(ft_list_data, dict):
+                    feature_types_obj = ft_list_data.get("featureTypes", {})
+                    if isinstance(feature_types_obj, dict):
+                        feature_types = feature_types_obj.get("featureType", [])
+                        if feature_types:
+                            if isinstance(feature_types, list) and len(feature_types) > 0:
+                                actual_feature_type_name = feature_types[0].get("name", shapefile_name) if isinstance(feature_types[0], dict) else shapefile_name
+                                feature_type_exists = True
+                            elif isinstance(feature_types, dict):
+                                actual_feature_type_name = feature_types.get("name", shapefile_name)
+                                feature_type_exists = True
+                            LOGGER.info("Found existing feature type name: %s (store: %s)", actual_feature_type_name, store_name)
+                            break
                     else:
-                        LOGGER.warning("No feature types found in datastore %s after upload", store_name)
+                        LOGGER.debug("Unexpected feature types structure in response: %s", type(feature_types_obj))
                 else:
-                    LOGGER.warning("Unexpected feature types structure in response")
+                    LOGGER.debug("Unexpected response format: %s", type(ft_list_data))
             else:
-                LOGGER.warning("Unexpected response format when listing feature types")
-        else:
-            LOGGER.warning("Failed to list feature types: status %s, response: %s", 
-                          ft_list_response.status_code, ft_list_response.text[:200] if ft_list_response.text else "No response")
-    except Exception as list_exc:
-        LOGGER.warning("Could not list feature types to find actual name: %s. Will try to create feature type explicitly.", list_exc)
+                LOGGER.debug("Feature type list returned status %s: %s", 
+                          ft_list_response.status_code, 
+                          ft_list_response.text[:200] if ft_list_response.text else "No response")
+        except Exception as list_exc:
+            LOGGER.debug("Attempt %d failed to list feature types: %s", attempt + 1, list_exc)
+        
+        if not feature_type_exists and attempt < 2:
+            LOGGER.info("Feature type not found, waiting 2 seconds before retry...")
+            await asyncio.sleep(2)
+    
+    if not feature_type_exists:
+        LOGGER.warning("No feature types found in datastore %s after %d attempts", store_name, 3)
     
     # If feature type doesn't exist, try to reload the datastore first
     # This will make GeoServer re-scan for shapefiles and auto-create feature types
@@ -301,83 +313,101 @@ async def _publish_to_geoserver(upload_log: UploadLogOut, db: Session) -> None:
         except Exception as reload_exc:
             LOGGER.warning("Could not reload datastore %s: %s", store_name, reload_exc)
         
-        # If still no feature type exists, try to create it explicitly
-        # First try the standard POST method with configure=all
+        # If still no feature type exists, try to create it explicitly using the nativeName
+        # This is the KEY: For shapefile datastores, we must use nativeName that matches the shapefile
         if not feature_type_exists:
-            LOGGER.info("Attempting to create feature type explicitly: workspace=%s, datastore=%s, feature_type=%s", 
+            LOGGER.info("CRITICAL: Feature type not auto-created. Attempting explicit creation: workspace=%s, datastore=%s, nativeName=%s", 
                        GEOSERVER_WORKSPACE, store_name, shapefile_name)
+            
+            normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
+            
+            # Method 1: Try POST to featuretypes with nativeName (GeoServer will discover attributes)
             try:
-                normalized_crs = _normalize_crs_to_epsg(upload_log.crs)
                 create_response = geo_admin_service.create_feature_type_from_shapefile(
                     workspace=GEOSERVER_WORKSPACE,
                     datastore=store_name,
                     feature_type_name=shapefile_name,
-                    native_name=shapefile_name,
+                    native_name=shapefile_name,  # CRITICAL: nativeName must match the shapefile name
                     enabled=True,
                     srs=normalized_crs
                 )
                 
+                LOGGER.info("Feature type creation response: status=%s, text=%s", 
+                           create_response.status_code,
+                           create_response.text[:500] if create_response.text else "No response")
+                
                 if create_response.status_code in (200, 201):
-                    LOGGER.info("Successfully created feature type %s using POST method", shapefile_name)
+                    LOGGER.info("SUCCESS: Created feature type %s using POST method", shapefile_name)
                     actual_feature_type_name = shapefile_name
                     feature_type_exists = True
+                    await asyncio.sleep(2)  # Wait for GeoServer to process
                 elif create_response.status_code == 409:
-                    LOGGER.info("Feature type %s already exists (status 409)", shapefile_name)
+                    LOGGER.info("Feature type %s already exists (409)", shapefile_name)
                     actual_feature_type_name = shapefile_name
                     feature_type_exists = True
                 else:
-                    LOGGER.warning("POST method failed (status %s), trying alternative method: %s", 
+                    LOGGER.warning("POST method failed (status %s). Response: %s", 
                                  create_response.status_code,
-                                 create_response.text[:300] if create_response.text else "No response")
+                                 create_response.text[:500] if create_response.text else "No response")
                     
-                    # Try alternative: re-upload with configure=all and update=overwrite
-                    LOGGER.info("Trying alternative method: re-upload with configure=all")
-                    try:
-                        alt_response = geo_admin_service.create_feature_type_from_shapefile_via_file_endpoint(
-                            workspace=GEOSERVER_WORKSPACE,
-                            datastore=store_name,
-                            shapefile_name=shapefile_name,
-                            file_path=os.fspath(file_path)
-                        )
-                        
-                        if alt_response.status_code in (200, 201, 202):
-                            LOGGER.info("Successfully created feature type %s using re-upload method", shapefile_name)
-                            await asyncio.sleep(2)  # Wait for processing
-                            # Check again
-                            try:
-                                ft_check = geo_admin_service.list_datastore_tables(
-                                    workspace=GEOSERVER_WORKSPACE,
-                                    datastore=store_name,
-                                )
-                                if ft_check.status_code == 200:
-                                    ft_data = ft_check.json()
-                                    if isinstance(ft_data, dict):
-                                        ft_obj = ft_data.get("featureTypes", {})
-                                        if isinstance(ft_obj, dict):
-                                            fts = ft_obj.get("featureType", [])
-                                            if fts:
-                                                feature_type_exists = True
-                                                LOGGER.info("Feature type confirmed after re-upload")
-                            except:
-                                pass
-                        else:
-                            LOGGER.error("Alternative method also failed: status %s, response: %s",
-                                       alt_response.status_code,
-                                       alt_response.text[:300] if alt_response.text else "No response")
-                    except Exception as alt_exc:
-                        LOGGER.error("Exception in alternative method: %s", alt_exc, exc_info=True)
+                    # Method 2: Try re-uploading with configure=all
+                    if not feature_type_exists:
+                        LOGGER.info("Trying Method 2: Re-upload with configure=all and update=overwrite")
+                        try:
+                            alt_response = geo_admin_service.create_feature_type_from_shapefile_via_file_endpoint(
+                                workspace=GEOSERVER_WORKSPACE,
+                                datastore=store_name,
+                                shapefile_name=shapefile_name,
+                                file_path=os.fspath(file_path)
+                            )
+                            
+                            LOGGER.info("Re-upload response: status=%s", alt_response.status_code)
+                            
+                            if alt_response.status_code in (200, 201, 202):
+                                LOGGER.info("SUCCESS: Re-upload completed, waiting for feature type creation")
+                                await asyncio.sleep(3)
+                                # Verify it was created
+                                try:
+                                    ft_check = geo_admin_service.list_datastore_tables(
+                                        workspace=GEOSERVER_WORKSPACE,
+                                        datastore=store_name,
+                                    )
+                                    if ft_check.status_code == 200:
+                                        ft_data = ft_check.json()
+                                        if isinstance(ft_data, dict):
+                                            ft_obj = ft_data.get("featureTypes", {})
+                                            if isinstance(ft_obj, dict):
+                                                fts = ft_obj.get("featureType", [])
+                                                if fts:
+                                                    feature_type_exists = True
+                                                    LOGGER.info("SUCCESS: Feature type confirmed after re-upload")
+                                except Exception as verify_exc:
+                                    LOGGER.warning("Could not verify after re-upload: %s", verify_exc)
+                            else:
+                                LOGGER.error("Re-upload failed: status %s, response: %s",
+                                           alt_response.status_code,
+                                           alt_response.text[:500] if alt_response.text else "No response")
+                        except Exception as alt_exc:
+                            LOGGER.error("Exception in re-upload method: %s", alt_exc, exc_info=True)
                         
             except Exception as create_exc:
-                LOGGER.error("Exception while creating feature type %s: %s", shapefile_name, create_exc, exc_info=True)
+                LOGGER.error("Exception while creating feature type: %s", create_exc, exc_info=True)
         
-        # Final check - if still no feature type, this is a critical issue
+        # Final verification
         if not feature_type_exists:
             LOGGER.error(
-                "CRITICAL: Feature type %s was NOT created in datastore %s after all attempts. "
-                "The layer will NOT be accessible. Please check GeoServer configuration and logs.",
-                shapefile_name, store_name
+                "CRITICAL FAILURE: Feature type %s was NOT created in datastore %s. "
+                "Layer will NOT be accessible. "
+                "Shapefile name: %s, Store name: %s, File: %s",
+                shapefile_name, store_name, shapefile_name, store_name, file_path
             )
-            # Don't raise exception - let the upload complete, but log the error
+            # Raise an exception to fail the upload - we need the layer to be created
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to create feature type '{shapefile_name}' in GeoServer datastore '{store_name}'. "
+                       f"The shapefile was uploaded but the layer was not published. "
+                       f"Please check GeoServer logs for details."
+            )
 
     # Update feature type with correct SRS from metadata if available
     # Only do this if the feature type exists
