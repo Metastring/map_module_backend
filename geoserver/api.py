@@ -238,8 +238,15 @@ async def list_layers1(db: Session = Depends(get_db)):
             enhanced_layers = []
             for layer in layers_list:
                 layer_name = layer.get("name")
+                geoserver_name = layer.get("name")
+                # Extract just the layer name (without workspace prefix)
+                # e.g., "metastring:gbif" -> "gbif"
+                name_only = geoserver_name.split(":")[-1] if geoserver_name and ":" in geoserver_name else geoserver_name
+                
                 enhanced_layer = {
-                    "name": layer.get("name"),
+                    "geoserver_name": geoserver_name,
+                    "name": name_only,
+                    "description": None,
                     "attribution": None,
                     "author": None,
                     "pdfLink": None,
