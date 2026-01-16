@@ -257,7 +257,8 @@ async def list_layers1(db: Session = Depends(get_db)):
                     "uploaderUserId": None,
                     "isDownloadable": None,
                     "layerStatus": None,
-                    "portalId": None
+                    "portalId": None,
+                    "category": "biodiversity"
                 }
 
                 # Add metadata if available
