@@ -1,23 +1,390 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Tuple
 import logging
 import io
-import pandas as pd
-import uuid
-from uuid import UUID
-from fastapi import UploadFile, HTTPException
+import os
+import shutil
+import subprocess
+import tempfile
+import zipfile
+import json
+from pathlib import Path
+from uuid import UUID, uuid4
 
+import aiofiles
+import fiona
+from fastapi import UploadFile, HTTPException, status
+from pyproj import CRS
 from sqlalchemy.orm import Session
 
 from upload_log.models.model import DataType, UploadLogCreate, UploadLogFilter, UploadLogOut
 from upload_log.models.schema import UploadLog as UploadLogTable
 from upload_log.dao.dao import UploadLogDAO
+from upload_log.service.metadata import derive_file_metadata
 from geoserver.model import PostGISRequest, CreateLayerRequest
 from geoserver.service import GeoServerService
 from geoserver.admin.service import GeoServerAdminService
 from geoserver.admin.dao import GeoServerAdminDAO
-from utils.config import host, port, username, password, database, geoserver_host, geoserver_port, geoserver_username, geoserver_password
+from geoserver.dao import GeoServerDAO
+from utils.config import (
+    host, port, username, password, database,
+    geoserver_host, geoserver_port, geoserver_username, geoserver_password,
+    sudo_password, geoserver_data_dir
+)
 
 logger = logging.getLogger(__name__)
+
+# Initialize GeoServer services for helper functions
+_geo_dao = GeoServerDAO(
+    base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
+    username=geoserver_username,
+    password=geoserver_password,
+)
+
+
+def run_sudo_command(command: list, timeout: int = 10) -> subprocess.CompletedProcess:
+    """Run a sudo command with password authentication."""
+    if command[0] == 'sudo':
+        command = ['sudo', '-S'] + command[1:]
+    else:
+        command = ['sudo', '-S'] + command
+    
+    try:
+        result = subprocess.run(
+            command,
+            input=sudo_password + '\n',
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        if result.returncode != 0:
+            logger.warning(f"Sudo command failed (exit code {result.returncode}): {' '.join(command)}")
+        return result
+    except subprocess.TimeoutExpired:
+        logger.error(f"Sudo command timed out: {' '.join(command)}")
+        raise
+    except Exception as e:
+        logger.error(f"Error running sudo command {' '.join(command)}: {e}")
+        raise
+
+
+def extract_shapefile_name_from_zip(zip_path: Path) -> Optional[str]:
+    """Extract the shapefile name from a zip archive."""
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            shp_files = [f for f in zip_ref.namelist() if f.lower().endswith('.shp')]
+            if shp_files:
+                return Path(shp_files[0]).stem
+    except Exception as exc:
+        logger.error("Could not extract shapefile name from zip %s: %s", zip_path, exc, exc_info=True)
+    return None
+
+
+def get_shapefile_schema(shapefile_path: Path) -> Optional[Tuple[List[Dict[str, Any]], Optional[str], Optional[Dict[str, float]]]]:
+    """Read the shapefile schema using fiona and convert to GeoServer attribute format."""
+    try:
+        with fiona.open(shapefile_path) as src:
+            schema = src.schema
+            properties = schema.get('properties', {})
+            geometry_type = schema.get('geometry', 'Unknown')
+            
+            crs = None
+            if src.crs:
+                try:
+                    crs = normalize_crs_to_epsg(str(src.crs))
+                except Exception:
+                    pass
+            
+            bbox = None
+            if src.bounds:
+                try:
+                    minx, miny, maxx, maxy = src.bounds
+                    bbox = {"minx": float(minx), "miny": float(miny), "maxx": float(maxx), "maxy": float(maxy)}
+                except Exception:
+                    pass
+            
+            attributes = []
+            geometry_binding_map = {
+                'Point': 'org.locationtech.jts.geom.Point',
+                'LineString': 'org.locationtech.jts.geom.LineString',
+                'Polygon': 'org.locationtech.jts.geom.Polygon',
+                'MultiPoint': 'org.locationtech.jts.geom.MultiPoint',
+                'MultiLineString': 'org.locationtech.jts.geom.MultiLineString',
+                'MultiPolygon': 'org.locationtech.jts.geom.MultiPolygon',
+                'GeometryCollection': 'org.locationtech.jts.geom.GeometryCollection',
+            }
+            geometry_binding = geometry_binding_map.get(geometry_type, 'org.locationtech.jts.geom.Geometry')
+            
+            attributes.append({
+                "name": "the_geom",
+                "minOccurs": 0,
+                "maxOccurs": 1,
+                "nillable": True,
+                "binding": geometry_binding
+            })
+            
+            type_mapping = {
+                'str': 'java.lang.String',
+                'int': 'java.lang.Integer',
+                'float': 'java.lang.Double',
+                'date': 'java.util.Date',
+                'bool': 'java.lang.Boolean',
+                'datetime': 'java.util.Date',
+            }
+            
+            for prop_name, prop_type in properties.items():
+                if prop_name.lower() in ['geometry', 'geom', 'the_geom', 'shape']:
+                    continue
+                java_type = type_mapping.get(prop_type, 'java.lang.String')
+                attributes.append({
+                    "name": prop_name,
+                    "minOccurs": 0,
+                    "maxOccurs": 1,
+                    "nillable": True,
+                    "binding": java_type
+                })
+            
+            logger.info("Read schema: geometry type=%s, CRS=%s, bbox=%s, total attributes=%d",
+                       geometry_type, crs, bbox, len(attributes))
+            return (attributes, crs, bbox)
+    except Exception as exc:
+        logger.error("Failed to read shapefile schema from %s: %s", shapefile_path, exc, exc_info=True)
+        return None
+
+
+def extract_shapefile_from_zip_for_schema(zip_path: Path) -> Optional[Path]:
+    """Extract the shapefile from zip to a temp location so we can read its schema."""
+    try:
+        temp_dir = tempfile.mkdtemp()
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(temp_dir)
+            shp_files = list(Path(temp_dir).rglob("*.shp"))
+            if shp_files:
+                return shp_files[0]
+    except Exception as exc:
+        logger.error("Failed to extract shapefile from zip %s: %s", zip_path, exc, exc_info=True)
+    return None
+
+
+def normalize_crs_to_epsg(crs_string: Optional[str]) -> Optional[str]:
+    """Normalize CRS string to EPSG format (e.g., 'EPSG:4326')."""
+    if not crs_string:
+        return None
+    try:
+        crs = CRS.from_user_input(crs_string)
+        epsg_code = crs.to_epsg()
+        if epsg_code:
+            return f"EPSG:{epsg_code}"
+        if crs.to_authority():
+            auth_name, code = crs.to_authority()
+            if auth_name and code:
+                return f"{auth_name.upper()}:{code}"
+        return crs_string
+    except Exception as exc:
+        logger.warning("Failed to normalize CRS '%s': %s", crs_string, exc)
+        if isinstance(crs_string, str) and crs_string.upper().startswith("EPSG:"):
+            return crs_string.upper()
+        return None
+
+
+async def cleanup_datastore_directory(datastore_path: str) -> None:
+    """Clean up old files from datastore directory."""
+    if not os.path.exists(datastore_path):
+        return
+    try:
+        deleted_count = 0
+        failed_files = []
+        for filename in os.listdir(datastore_path):
+            file_item_path = os.path.join(datastore_path, filename)
+            try:
+                if os.path.isfile(file_item_path):
+                    os.remove(file_item_path)
+                    deleted_count += 1
+                elif os.path.isdir(file_item_path):
+                    shutil.rmtree(file_item_path)
+                    deleted_count += 1
+            except PermissionError:
+                failed_files.append(file_item_path)
+            except Exception:
+                failed_files.append(file_item_path)
+        
+        if failed_files:
+            for file_item_path in failed_files:
+                try:
+                    result = run_sudo_command(['rm', '-rf', file_item_path], timeout=5)
+                    if result.returncode == 0:
+                        deleted_count += 1
+                except Exception:
+                    pass
+            
+            if deleted_count == 0:
+                try:
+                    result = run_sudo_command(['rm', '-rf', datastore_path], timeout=10)
+                    if result.returncode == 0:
+                        os.makedirs(datastore_path, exist_ok=True)
+                        try:
+                            run_sudo_command(['chown', '-R', 'tomcat:tomcat', datastore_path], timeout=5)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+    except Exception as exc:
+        logger.debug("Exception cleaning up directory: %s", exc)
+
+
+def resolve_feature_type_name(file_path: Path, store_name: str) -> str:
+    """Resolve the expected feature type name from zip or use store_name."""
+    if file_path.suffix.lower() == '.zip':
+        zip_filename_extracted = extract_shapefile_name_from_zip(file_path)
+        if zip_filename_extracted:
+            return zip_filename_extracted
+        try:
+            metadata = derive_file_metadata(file_path)
+            metadata_layer_name = metadata.get("layer_name")
+            if metadata_layer_name:
+                return metadata_layer_name
+        except Exception:
+            pass
+    return store_name
+
+
+def get_feature_type_from_response(response) -> Optional[str]:
+    """Extract feature type name from GeoServer response."""
+    if hasattr(response, 'headers') and 'Location' in response.headers:
+        location = response.headers['Location']
+        if '/featuretypes/' in location:
+            return location.split('/featuretypes/')[-1].split('.')[0]
+    
+    if response.text:
+        try:
+            response_data = json.loads(response.text)
+            if isinstance(response_data, dict):
+                feature_type = response_data.get("featureType", {})
+                if isinstance(feature_type, dict):
+                    return feature_type.get("name")
+        except (json.JSONDecodeError, AttributeError):
+            pass
+    return None
+
+
+async def wait_for_geoserver_processing(status_code: int) -> None:
+    """Wait for GeoServer to process based on response status."""
+    import asyncio
+    if status_code == 202:
+        await asyncio.sleep(5)
+    elif status_code in (200, 201):
+        await asyncio.sleep(3)
+
+
+def fix_subdirectory_files(datastore_path: str, expected_feature_type_name: str) -> bool:
+    """Fix files if they're in subdirectory instead of root. Returns True if fixed."""
+    subdirectory_path = os.path.join(datastore_path, expected_feature_type_name)
+    root_shp_path = os.path.join(datastore_path, expected_feature_type_name + ".shp")
+    subdir_shp_path = os.path.join(subdirectory_path, expected_feature_type_name + ".shp")
+    
+    if not (os.path.isdir(subdirectory_path) and os.path.exists(subdir_shp_path)):
+        return False
+    
+    root_shp_size = os.path.getsize(root_shp_path) if os.path.exists(root_shp_path) else 0
+    subdir_shp_size = os.path.getsize(subdir_shp_path) if os.path.exists(subdir_shp_path) else 0
+    
+    if subdir_shp_size <= root_shp_size * 10:
+        return False
+    
+    try:
+        required_exts = ['.shp', '.shx', '.dbf', '.prj', '.cpg', '.qmd', '.qix']
+        copied_count = 0
+        for ext in required_exts:
+            subdir_file = os.path.join(subdirectory_path, expected_feature_type_name + ext)
+            root_file = os.path.join(datastore_path, expected_feature_type_name + ext)
+            if os.path.exists(subdir_file):
+                try:
+                    shutil.copy2(subdir_file, root_file)
+                    copied_count += 1
+                except PermissionError:
+                    try:
+                        result = run_sudo_command(['cp', subdir_file, root_file], timeout=5)
+                        if result.returncode == 0:
+                            copied_count += 1
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        
+        if copied_count == 0:
+            try:
+                copy_cmd = f"cp -r {subdirectory_path}/* {datastore_path}/"
+                result = run_sudo_command(['sh', '-c', copy_cmd], timeout=10)
+                if result.returncode == 0:
+                    copied_count = len(required_exts)
+            except Exception:
+                pass
+        
+        if copied_count > 0:
+            try:
+                run_sudo_command(['chown', '-R', 'tomcat:tomcat', datastore_path], timeout=5)
+            except Exception:
+                pass
+            return True
+    except Exception as exc:
+        logger.debug("Exception fixing subdirectory files: %s", exc)
+    
+    return False
+
+
+def verify_layer_features(geoserver_layer_name: str) -> Tuple[bool, Optional[int]]:
+    """Verify layer exists and has features. Returns (success, feature_count)."""
+    try:
+        wfs_response = _geo_dao.query_features(layer=geoserver_layer_name, max_features=1)
+        if wfs_response.status_code != 200:
+            return False, None
+        
+        import xml.etree.ElementTree as ET
+        try:
+            root = ET.fromstring(wfs_response.text)
+            num_features = root.get("numberOfFeatures", "0")
+            feature_count = int(num_features) if num_features.isdigit() else 0
+            return feature_count > 0, feature_count
+        except ET.ParseError:
+            try:
+                json_data = json.loads(wfs_response.text)
+                if isinstance(json_data, dict):
+                    features = json_data.get("features", [])
+                    feature_count = len(features) if isinstance(features, list) else 0
+                    return feature_count > 0, feature_count
+            except json.JSONDecodeError:
+                if "numberOfFeatures=\"0\"" in wfs_response.text or "numberOfFeatures='0'" in wfs_response.text:
+                    return False, 0
+    except Exception:
+        pass
+    return False, None
+
+
+async def persist_upload(file: UploadFile, uploads_dir: Path) -> Path:
+    """Persist uploaded file to disk."""
+    if not file.filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File name is required")
+    
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+    file_suffix = Path(file.filename).suffix
+    unique_name = f"{uuid4().hex}{file_suffix}"
+    destination = uploads_dir / unique_name
+    
+    try:
+        async with aiofiles.open(destination, "wb") as out_file:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                await out_file.write(chunk)
+    except Exception as exc:
+        if destination.exists():
+            destination.unlink(missing_ok=True)
+        logger.error("Failed to persist upload %s: %s", file.filename, exc)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to persist file") from exc
+    finally:
+        await file.close()
+    
+    return destination
 
 
 class UploadLogService:

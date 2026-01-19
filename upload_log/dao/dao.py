@@ -28,7 +28,12 @@ class UploadLogDAO:
     def create(upload_log: UploadLogTable, db: Session) -> Optional[UploadLogTable]:
         """Create a new upload log record."""
         try:
-            logger.info(f"Adding upload log to session: id={upload_log.id}, layer_name={upload_log.layer_name}, uploaded_by={upload_log.uploaded_by}")
+            logger.info(
+                "Adding upload log to session: id=%s, store_name=%s, uploaded_by=%s",
+                upload_log.id,
+                upload_log.layer_name,
+                upload_log.uploaded_by,
+            )
             db.add(upload_log)
             logger.info(f"Committing upload log to database: id={upload_log.id}")
             db.commit()

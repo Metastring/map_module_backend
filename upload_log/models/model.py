@@ -3,7 +3,7 @@ from enum import Enum
 from typing import Dict, List, Optional
 import uuid
 
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, ConfigDict, validator
 
 
 class DataType(str, Enum):
@@ -13,7 +13,16 @@ class DataType(str, Enum):
 
 
 class UploadLogBase(BaseModel):
-    layer_name: str = Field(..., description="Canonical name for the uploaded layer or dataset")
+    model_config = ConfigDict(populate_by_name=True)
+
+    # Backward-compatible field:
+    # - internal attribute remains `layer_name` (so existing code keeps working)
+    # - external JSON key becomes `store_name`
+    layer_name: str = Field(
+        ...,
+        alias="store_name",
+        description="GeoServer datastore/store name for the uploaded dataset",
+    )
     file_format: str = Field(..., description="Source file format or extension")
     data_type: DataType = Field(..., description="Spatial data classification (vector/raster)")
     crs: Optional[str] = Field(None, description="Coordinate reference system identifier")
@@ -46,13 +55,14 @@ class UploadLogOut(UploadLogBase):
     id: uuid.UUID
     uploaded_on: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 class UploadLogFilter(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: Optional[uuid.UUID] = None
-    layer_name: Optional[str] = None
+    layer_name: Optional[str] = Field(default=None, alias="store_name")
     file_format: Optional[str] = None
     data_type: Optional[DataType] = None
     crs: Optional[str] = None
@@ -63,3 +73,4 @@ class UploadLogFilter(BaseModel):
     uploaded_by: Optional[str] = None
     uploaded_on: Optional[datetime] = None
 
+    # model_config above enables accepting both `layer_name` and `store_name`

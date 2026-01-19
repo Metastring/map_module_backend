@@ -3,6 +3,7 @@ import requests
 from typing import Optional, List, Dict, Any
 from uuid import UUID, uuid4
 from datetime import datetime
+from pathlib import Path
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, UploadFile
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from register_dataset.model.model import (
     RegisterDatasetResponse,
     StyleConfigForColumn,
 )
-from upload_log.service.service import UploadLogService
+from upload_log.service.service import UploadLogService, persist_upload
 from upload_log.dao.dao import UploadLogDAO
 from geoserver.service import GeoServerService
 from geoserver.admin.service import GeoServerAdminService
@@ -21,7 +22,6 @@ from metadata.service.service import MetadataService
 from metadata.models.model import MetadataInput
 from styles.service.style_service import StyleService
 from styles.models.model import StyleGenerateRequest, DataSource
-from upload_log.api.api import _persist_upload
 import os
 from upload_log.models.model import UploadLogCreate, DataType
 from utils.config import (
@@ -32,6 +32,8 @@ from utils.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+UPLOADS_DIR = Path(__file__).resolve().parents[2] / "uploads"
 
 
 class RegisterDatasetService:
@@ -73,7 +75,7 @@ class RegisterDatasetService:
             logger.info(f"Step 1: Creating table and inserting data for {request.table_name}")
             
             # Persist file for create_table_and_insert1
-            stored_path = await _persist_upload(file)
+            stored_path = await persist_upload(file, UPLOADS_DIR)
             
             try:
                 # Create upload log if uploaded_by is provided
