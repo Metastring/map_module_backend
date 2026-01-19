@@ -4,34 +4,27 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# ############# local ###############
-# host = "localhost"
-# port = 5432
-# username = "postgres"
-# password = "2002"
-# database = "CML_test"
-# database_url = f"postgresql://{username}:{password}@{host}:{port}/{database}"
-
-# ############## GeoServer Configuration ###############
-# geoserver_host = "localhost"
-# geoserver_port = "8080"
-# geoserver_username = "admin"
-# geoserver_password = "geoserver"
-
-###################### Staging Machine #########################
+############# Database Configuration ###############
+# Uses environment variables from .env file, with local defaults
 host = os.getenv("DB_HOST", "localhost")
 port = int(os.getenv("DB_PORT", "5432"))
-username = os.getenv("DB_USERNAME", "")
-password = os.getenv("DB_PASSWORD", "")
-database = os.getenv("DB_NAME", "")
+username = os.getenv("DB_USERNAME", "postgres")
+password = os.getenv("DB_PASSWORD", "2002")
+database = os.getenv("DB_NAME", "CML_test")
+db_schema = os.getenv("DB_SCHEMA", "cml1")
 database_url = f"postgresql://{username}:{password}@{host}:{port}/{database}"
 
-############################ Staging GeoServer Configuration ############################
 
-geoserver_host = os.getenv("GEOSERVER_HOST", "")
-geoserver_port = os.getenv("GEOSERVER_PORT", "")
-geoserver_username = os.getenv("GEOSERVER_USERNAME", "")
-geoserver_password = os.getenv("GEOSERVER_PASSWORD", "")
+############## GeoServer Configuration ###############
+# Uses environment variables from .env file, with local defaults
+geoserver_host = os.getenv("GEOSERVER_HOST", "localhost")
+geoserver_port = os.getenv("GEOSERVER_PORT", "8080")
+geoserver_username = os.getenv("GEOSERVER_USERNAME", "admin")
+geoserver_password = os.getenv("GEOSERVER_PASSWORD", "geoserver")
+geoserver_data_dir = os.getenv("GEOSERVER_DATA_DIR", "/usr/share/geoserver/geoserver-2.26.1/data_dir/data")
+
+############## Sudo Configuration ###############
+sudo_password = os.getenv("SUDO_PASSWORD", "meta")
 
 ####################### Dataset Mapping Configuration #########################
 # Maps frontend dataset names to actual database table names

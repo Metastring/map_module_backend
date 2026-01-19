@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Dict, Any, Optional
 
 from geoserver.admin.dao import GeoServerAdminDAO
 from geoserver.admin.model import UpdateRequest
@@ -195,6 +195,66 @@ class GeoServerAdminService:
         if not feature_type:
             raise ValueError("Feature type name is required.")
         return self.dao.update_feature_type(workspace, datastore, feature_type, config, recalculate=recalculate)
+
+    def delete_feature_type(self, workspace: str, datastore: str, feature_type: str):
+        """
+        Delete a feature type from a datastore.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        if not feature_type:
+            raise ValueError("Feature type name is required.")
+        return self.dao.delete_feature_type(workspace, datastore, feature_type)
+
+    def create_feature_type_from_shapefile(
+        self,
+        workspace: str,
+        datastore: str,
+        shapefile_name: str,
+        feature_type_name: str = None,
+        enabled: bool = True,
+        attributes: Optional[List[Dict[str, Any]]] = None,
+        srs: Optional[str] = None,
+        native_bbox: Optional[Dict[str, float]] = None
+    ):
+        """
+        Create a feature type from a shapefile in a shapefile datastore.
+        
+        Args:
+            workspace: Workspace name
+            datastore: Datastore name (shapefile datastore)
+            shapefile_name: Name of the shapefile (without .shp extension) - used as nativeName
+            feature_type_name: Display name for the feature type (defaults to shapefile_name)
+            enabled: Whether the feature type should be enabled
+            attributes: List of attribute definitions. If provided, these will be used.
+            srs: Spatial Reference System (e.g., "EPSG:4326")
+            native_bbox: Native bounding box dict with minx, miny, maxx, maxy keys
+        
+        Returns:
+            Response object from GeoServer REST API
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        if not shapefile_name:
+            raise ValueError("Shapefile name is required.")
+        return self.dao.create_feature_type_from_shapefile(
+            workspace, datastore, shapefile_name, feature_type_name, enabled, attributes, srs, native_bbox
+        )
+
+    def reload_datastore(self, workspace: str, datastore: str):
+        """
+        Reload a datastore to trigger auto-discovery of feature types.
+        This is useful after uploading shapefiles to trigger GeoServer to discover and create feature types.
+        """
+        if not workspace:
+            raise ValueError("Workspace name is required.")
+        if not datastore:
+            raise ValueError("Datastore name is required.")
+        return self.dao.reload_datastore(workspace, datastore)
 
     def configure_layer_tile_caching(
         self,

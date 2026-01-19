@@ -1,7 +1,7 @@
 import requests
 import logging
 import xml.etree.ElementTree as ET
-from typing import List
+from typing import List, Dict, Any, Optional
 from geoserver.admin.model import UpdateRequest
 
 logger = logging.getLogger(__name__)
@@ -327,6 +327,108 @@ class GeoServerAdminDAO:
         )
         return response
 
+    def create_feature_type_from_shapefile(
+        self,
+        workspace: str,
+        datastore: str,
+        shapefile_name: str,
+        feature_type_name: str = None,
+        enabled: bool = True,
+        attributes: Optional[List[Dict[str, Any]]] = None,
+        srs: Optional[str] = None,
+        native_bbox: Optional[Dict[str, float]] = None
+    ):
+        """
+        Create a feature type from a shapefile in a shapefile datastore.
+        
+        Args:
+            workspace: Workspace name
+            datastore: Datastore name (shapefile datastore)
+            shapefile_name: Name of the shapefile (without .shp extension) - used as nativeName
+            feature_type_name: Display name for the feature type (defaults to shapefile_name)
+            enabled: Whether the feature type should be enabled
+            attributes: List of attribute definitions. If provided, these will be used.
+                       If None, GeoServer will try to auto-discover (may not work for shapefiles)
+            srs: Spatial Reference System (e.g., "EPSG:4326"). If provided, will be set on the feature type.
+            native_bbox: Native bounding box dict with minx, miny, maxx, maxy keys. If provided, will be set explicitly.
+        
+        Returns:
+            Response object from GeoServer REST API
+        """
+        url = (
+            f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes"
+        )
+        headers = {"Content-type": "application/json"}
+
+        # Use shapefile_name as feature_type_name if not provided
+        if not feature_type_name:
+            feature_type_name = shapefile_name
+
+        feature_type_config = {
+            "featureType": {
+                "name": feature_type_name,
+                "nativeName": shapefile_name,  # For shapefiles, nativeName is the shapefile name
+                "enabled": enabled
+            }
+        }
+        
+        # CRITICAL: For shapefiles, do NOT specify attributes explicitly if possible
+        # GeoServer needs to read the actual shapefile to discover attributes and geometry
+        # Only include attributes if explicitly provided (as fallback for "no attributes" error)
+        # When attributes are None, GeoServer will auto-discover from the shapefile files
+        if attributes:
+            feature_type_config["featureType"]["attributes"] = {
+                "attribute": attributes
+            }
+        # If attributes is None, don't include it - let GeoServer auto-discover from shapefile
+        
+        # If SRS is provided, include it
+        if srs:
+            feature_type_config["featureType"]["srs"] = srs
+            feature_type_config["featureType"]["nativeSRS"] = srs
+        
+        # CRITICAL: Set native bounding box explicitly if provided
+        # This prevents the "illegal bbox" error during creation
+        # Note: We'll recalculate from actual data after creation to ensure accuracy
+        if native_bbox and all(k in native_bbox for k in ["minx", "miny", "maxx", "maxy"]):
+            native_crs = srs or "EPSG:4326"
+            feature_type_config["featureType"]["nativeBoundingBox"] = {
+                "minx": native_bbox["minx"],
+                "miny": native_bbox["miny"],
+                "maxx": native_bbox["maxx"],
+                "maxy": native_bbox["maxy"],
+                "crs": native_crs
+            }
+            
+            # Set lat/lon bounding box - if CRS is EPSG:4326, use same values
+            # Otherwise, set initial values (will be recalculated properly later)
+            if native_crs == "EPSG:4326":
+                feature_type_config["featureType"]["latLonBoundingBox"] = {
+                    "minx": native_bbox["minx"],
+                    "miny": native_bbox["miny"],
+                    "maxx": native_bbox["maxx"],
+                    "maxy": native_bbox["maxy"],
+                    "crs": "EPSG:4326"
+                }
+            else:
+                # For non-4326, set initial values to avoid illegal bbox error
+                # Will be properly transformed during recalculation
+                feature_type_config["featureType"]["latLonBoundingBox"] = {
+                    "minx": native_bbox["minx"],
+                    "miny": native_bbox["miny"],
+                    "maxx": native_bbox["maxx"],
+                    "maxy": native_bbox["maxy"],
+                    "crs": "EPSG:4326"
+                }
+
+        # Try with configure=all parameter first (may not work, but worth trying)
+        params = {"configure": "all"}
+        
+        response = requests.post(
+            url, auth=self.auth, json=feature_type_config, headers=headers, params=params
+        )
+        return response
+
     def get_table_details(self, workspace: str, datastore: str, table_name: str):
         """
         Get details of a specific table in a datastore.
@@ -378,6 +480,22 @@ class GeoServerAdminDAO:
         url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{feature_type}.json"
         headers = {"Accept": "application/json"}
         return requests.get(url, auth=self.auth, headers=headers)
+
+    def delete_feature_type(self, workspace: str, datastore: str, feature_type: str):
+        """
+        Delete a feature type from a datastore.
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/featuretypes/{feature_type}"
+        return requests.delete(url, auth=self.auth)
+
+    def reload_datastore(self, workspace: str, datastore: str):
+        """
+        Reload a datastore to trigger auto-discovery of feature types.
+        This is useful after uploading shapefiles to trigger GeoServer to discover and create feature types.
+        """
+        url = f"{self.base_url}/workspaces/{workspace}/datastores/{datastore}/reload"
+        headers = {"Content-type": "application/json"}
+        return requests.post(url, auth=self.auth, headers=headers)
 
     def update_feature_type(self, workspace: str, datastore: str, feature_type: str, config: dict, recalculate: bool = False):
         """
