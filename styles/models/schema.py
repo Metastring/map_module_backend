@@ -1,4 +1,3 @@
-import configparser
 import enum
 import logging
 from sqlalchemy import (
@@ -18,24 +17,9 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from database.database import engine
+from utils.config import db_schema
 
-config = configparser.ConfigParser()
-encodings_to_try = ['utf-8-sig', 'utf-8', 'latin-1', 'cp1252']
-read_success = False
-for encoding in encodings_to_try:
-    try:
-        if config.read("secure.ini", encoding=encoding):
-            read_success = True
-            break
-    except (UnicodeDecodeError, UnicodeError):
-        continue
-    except Exception:
-        continue
-
-if not read_success:
-    raise ValueError("Error reading secure.ini: Could not decode file with any supported encoding. Please ensure the file is saved as UTF-8.")
-
-SCHEMA = config.get("DB_SCHEMA", "schema")
+SCHEMA = db_schema
 
 Base = declarative_base()
 

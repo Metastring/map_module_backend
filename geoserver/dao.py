@@ -73,8 +73,12 @@ class GeoServerDAO:
             )
 
         try:
+            # Add configure parameter to trigger automatic feature type creation
+            # configure=first: configure only the first feature type found (more reliable than configure=all)
+            # If configure=first doesn't work, we'll explicitly create the feature type after upload
+            params = {"configure": "first"}
             with open(upload_path, "rb") as f:
-                response = requests.put(url, auth=self.auth, data=f, headers=headers)
+                response = requests.put(url, auth=self.auth, data=f, headers=headers, params=params)
         finally:
             if cleanup_path and os.path.exists(cleanup_path):
                 os.remove(cleanup_path)
