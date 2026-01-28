@@ -3,6 +3,9 @@ from pydantic import BaseModel, Field, ConfigDict
 from uuid import UUID
 from datetime import datetime
 
+# Use configured default schema instead of hardcoding "public"
+from utils.config import db_schema as DEFAULT_DB_SCHEMA
+
 # Import from styles model for style configuration
 from styles.models.model import (
     ClassificationMethod,
@@ -30,7 +33,7 @@ class RegisterDatasetFormData(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     
     table_name: str = Field(..., description="Name for the database table")
-    db_schema: str = Field(default="public", alias="schema", description="Database schema")
+    db_schema: str = Field(default=DEFAULT_DB_SCHEMA, alias="schema", description="Database schema")
     uploaded_by: Optional[str] = Field(None, description="User who uploaded the dataset")
     layer_name: Optional[str] = Field(None, description="Name for the GeoServer layer")
     tags: Optional[str] = Field(None, description="Comma-separated tags")
@@ -66,7 +69,7 @@ class RegisterDatasetRequest(BaseModel):
     
     # Parameters for create-table-and-insert1
     table_name: str = Field(..., description="Name for the database table")
-    db_schema: str = Field(default="public", alias="schema", description="Database schema")
+    db_schema: str = Field(default=DEFAULT_DB_SCHEMA, alias="schema", description="Database schema")
     uploaded_by: Optional[str] = Field(None, description="User who uploaded the dataset")
     layer_name: Optional[str] = Field(None, description="Name for the GeoServer layer")
     tags: Optional[List[str]] = Field(None, description="Tags for the dataset")

@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 
 import aiofiles
 import fiona
+import pandas as pd
 from fastapi import UploadFile, HTTPException, status
 from pyproj import CRS
 from sqlalchemy.orm import Session
