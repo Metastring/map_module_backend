@@ -7,11 +7,13 @@ pipeline {
 
     stages {
 
-        stage('Pull Latest Code') {
+        stage('Deploy Code') {
             steps {
-                dir("${WORK_DIR}") {
-                    checkout scm
-                }
+                sh '''
+                rsync -av --delete \
+                ${WORKSPACE}/ \
+                ${WORK_DIR}/
+                '''
             }
         }
 
