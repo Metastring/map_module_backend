@@ -30,7 +30,7 @@ pipeline {
             steps {
                 dir("${WORK_DIR}") {
                     sh '''
-                    source env/bin/activate
+                    . env/bin/activate
                     pip install -r requirements.txt
                     '''
                 }
@@ -40,7 +40,7 @@ pipeline {
         stage('Restart Backend Service') {
             steps {
                 sh '''
-                systemctl --user restart map_module_backend.service
+                sudo systemctl restart map_module_backend
                 '''
             }
         }
