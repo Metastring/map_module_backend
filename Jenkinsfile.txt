@@ -1,0 +1,37 @@
+pipeline {
+    agent any
+
+    environment {
+        WORK_DIR = '/home/metastring/src/map_module_backend'
+    }
+
+    stages {
+
+        stage('Pull Latest Code') {
+            steps {
+                dir("${WORK_DIR}") {
+                    checkout scm
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                dir("${WORK_DIR}") {
+                    sh '''
+                    source env/bin/activate
+                    pip install -r requirements.txt
+                    '''
+                }
+            }
+        }
+
+        stage('Restart Backend Service') {
+            steps {
+                sh '''
+                systemctl --user restart map_module_backend.service
+                '''
+            }
+        }
+    }
+}
