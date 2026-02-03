@@ -11,6 +11,11 @@ pipeline {
             steps {
                 sh '''
                 rsync -av --delete \
+                --exclude '.git/' \
+                --exclude 'env/' \
+                --exclude '__pycache__/' \
+                --exclude '*.log' \
+                --exclude '.pytest_cache/' \
                 ${WORKSPACE}/ \
                 ${WORK_DIR}/
                 '''
