@@ -11,29 +11,27 @@ pipeline {
             steps {
                 sh '''
                 rsync -av --delete \
-                --no-owner \
-                --no-group \
-                --no-perms \
-                --omit-dir-times \
-                --exclude '.git/' \
-                --exclude 'env/' \
-                --exclude '__pycache__/' \
-                --exclude '*.log' \
-                --exclude '.pytest_cache/' \
-                ${WORKSPACE}/ \
-                ${WORK_DIR}/
+                  --no-owner \
+                  --no-group \
+                  --no-perms \
+                  --omit-dir-times \
+                  --exclude '.git/' \
+                  --exclude '.env' \
+                  --exclude 'env/' \
+                  --exclude '__pycache__/' \
+                  --exclude '*.log' \
+                  --exclude '.pytest_cache/' \
+                  ${WORKSPACE}/ \
+                  ${WORK_DIR}/
                 '''
             }
         }
 
         stage('Install Dependencies') {
             steps {
-                dir("${WORK_DIR}") {
-                    sh '''
-                    . env/bin/activate
-                    pip install -r requirements.txt
-                    '''
-                }
+                sh '''
+                ${WORK_DIR}/env/bin/pip install -r ${WORK_DIR}/requirements.txt
+                '''
             }
         }
 
