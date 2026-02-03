@@ -11,6 +11,10 @@ pipeline {
             steps {
                 sh '''
                 rsync -av --delete \
+                --no-owner \
+                --no-group \
+                --no-perms \
+                --omit-dir-times \
                 --exclude '.git/' \
                 --exclude 'env/' \
                 --exclude '__pycache__/' \
