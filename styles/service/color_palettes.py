@@ -210,6 +210,13 @@ def get_colors(palette_name: str, num_classes: int) -> List[str]:
     Returns:
         List of hex color strings
     """
+    # Validate num_classes at the start to prevent division by zero
+    if num_classes is None or num_classes <= 0:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"Invalid num_classes ({num_classes}) in get_colors, defaulting to 1")
+        num_classes = 1
+    
     if palette_name not in COLORBREWER_PALETTES:
         palette_name = "YlOrRd"  # Default fallback
     
