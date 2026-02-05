@@ -231,6 +231,9 @@ def get_colors(palette_name: str, num_classes: int) -> List[str]:
     
     # If we need fewer, sample evenly
     if num_classes < len(colors):
+        # Validate num_classes to prevent division by zero
+        if num_classes is None or num_classes <= 0:
+            num_classes = 1
         step = len(colors) / num_classes
         return [colors[int(i * step)] for i in range(num_classes)]
     

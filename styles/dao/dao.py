@@ -162,6 +162,10 @@ class StyleDAO:
                 f"Column '{column_name}' does not exist in table '{schema}.{table_name}'"
             )
         
+        # Validate num_classes to prevent division by zero
+        if num_classes is None or num_classes <= 0:
+            raise ValueError(f"num_classes must be a positive integer, got: {num_classes}")
+        
         # Generate percentile values
         percentiles = [i / num_classes for i in range(1, num_classes)]
         percentile_str = ", ".join([str(p) for p in percentiles])
@@ -776,6 +780,10 @@ class StyleDAO:
         
         if not values:
             return []
+        
+        # Validate num_classes to prevent division by zero
+        if num_classes is None or num_classes <= 0:
+            raise ValueError(f"num_classes must be a positive integer, got: {num_classes}")
         
         # Compute quantiles manually
         percentiles = [i / num_classes for i in range(1, num_classes)]

@@ -47,6 +47,11 @@ class ClassificationService:
         Returns:
             ClassificationResult with breaks/categories and colors
         """
+        # Validate num_classes to prevent division by zero
+        if num_classes is None or num_classes <= 0:
+            logger.warning(f"Invalid num_classes ({num_classes}), defaulting to 1")
+            num_classes = 1
+        
         # Get colors
         if custom_colors and len(custom_colors) >= num_classes:
             colors = custom_colors[:num_classes]
@@ -143,6 +148,10 @@ class ClassificationService:
         Compute equal interval classification.
         Divides the range into equal-sized intervals.
         """
+        # Validate num_classes to prevent division by zero
+        if num_classes is None or num_classes <= 0:
+            num_classes = 1
+        
         if min_value == max_value:
             return ClassificationResult(
                 method=ClassificationMethod.EQUAL_INTERVAL,
@@ -175,6 +184,10 @@ class ClassificationService:
         Compute quantile classification.
         Each class contains approximately the same number of features.
         """
+        # Validate num_classes to prevent division by zero
+        if num_classes is None or num_classes <= 0:
+            num_classes = 1
+        
         sorted_values = sorted([v for v in values if v is not None])
         
         if len(sorted_values) == 0:

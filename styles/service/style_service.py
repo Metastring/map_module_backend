@@ -152,6 +152,10 @@ class StyleService:
                 classification_method = ClassificationMethod(classification_method)
             
             num_classes = request.num_classes or style_metadata.num_classes
+            # Validate num_classes to prevent division by zero
+            if num_classes is None or num_classes <= 0:
+                logger.warning(f"Invalid num_classes ({num_classes}), defaulting to 5")
+                num_classes = 5
             palette = request.color_palette or style_metadata.color_palette
             custom_colors = request.custom_colors or style_metadata.custom_colors
             
