@@ -153,9 +153,11 @@ class StyleService:
             
             num_classes = request.num_classes or style_metadata.num_classes
             # Validate num_classes to prevent division by zero
+            logger.error(f"[DEBUG] num_classes before validation: {num_classes}, type: {type(num_classes)}, from_request: {request.num_classes}, from_metadata: {style_metadata.num_classes if style_metadata else 'N/A'}")
             if num_classes is None or num_classes <= 0:
-                logger.warning(f"Invalid num_classes ({num_classes}), defaulting to 5")
+                logger.error(f"[DEBUG] INVALID num_classes detected: {num_classes}, defaulting to 5")
                 num_classes = 5
+            logger.error(f"[DEBUG] num_classes after validation: {num_classes}")
             palette = request.color_palette or style_metadata.color_palette
             custom_colors = request.custom_colors or style_metadata.custom_colors
             
