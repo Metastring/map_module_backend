@@ -405,10 +405,15 @@ class StyleService:
                 layer_name, column_name
             )
         
+        # Validate categories - prevent division by zero if empty
+        if not categories or len(categories) == 0:
+            logger.warning(f"No distinct values found for categorical column {column_name} in {table_name}")
+            raise ValueError(f"No distinct values found for column '{column_name}'. Cannot create categorical style.")
+        
         # Compute classification
         result = self.classification_service.classify(
             method=ClassificationMethod.CATEGORICAL,
-            num_classes=len(categories),
+            num_classes=len(categories),  # This is now guaranteed to be > 0
             categories=categories,
             palette_name=palette,
             custom_colors=custom_colors
