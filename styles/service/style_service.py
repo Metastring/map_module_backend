@@ -10,6 +10,7 @@ import json
 from datetime import datetime
 
 from ..dao.dao import StyleDAO
+from utils.config import db_schema as DEFAULT_DB_SCHEMA
 from ..models.model import (
     StyleMetadataCreate,
     StyleGenerateRequest,
@@ -56,7 +57,7 @@ class StyleService:
     def generate_style(
         self,
         request: StyleGenerateRequest,
-        schema: str = "public"
+        schema: str = DEFAULT_DB_SCHEMA
     ) -> StyleGenerateResponse:
         """
         Main method to generate a complete style for a layer.

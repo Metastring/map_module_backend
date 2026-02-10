@@ -5,6 +5,7 @@ from typing import List, Optional
 import json
 from styles.models.model import DataSource as DataSourceEnum
 from database.database import get_db
+from utils.identifiers import normalize_identifier
 from register_dataset.model.model import (
     RegisterDatasetRequest,
     RegisterDatasetResponse,
@@ -150,15 +151,23 @@ async def register_dataset(
                 detail="Only CSV, XLSX, and XLS files are allowed"
             )
 
-        # Build request
+        # Build request (normalize identifiers to avoid hyphens/spaces breaking styles/DB)
+        normalized_table_name = normalize_identifier(form_data.table_name, prefix_if_digit="tbl")
+        normalized_layer_name = normalize_identifier(
+            form_data.layer_name or normalized_table_name, prefix_if_digit="layer"
+        )
+        normalized_store_name = normalize_identifier(
+            form_data.store_name or f"{normalized_table_name}_store", prefix_if_digit="store"
+        )
+
         request = RegisterDatasetRequest(
-            table_name=form_data.table_name,
+            table_name=normalized_table_name,
             db_schema=form_data.db_schema,  # Uses alias 'schema' for JSON serialization
             uploaded_by=form_data.uploaded_by,
-            layer_name=form_data.layer_name,
+            layer_name=normalized_layer_name,
             tags=tags_list,
             workspace=form_data.workspace,
-            store_name=form_data.store_name,
+            store_name=normalized_store_name,
             name_of_dataset=form_data.name_of_dataset,
             theme=form_data.theme,
             keywords=keywords_list,
@@ -273,11 +282,17 @@ async def register_shapefile(
                 detail="Only ZIP files containing shapefiles are allowed"
             )
 
-        # Build request
+        # Build request (normalize identifiers)
+        normalized_layer_name = normalize_identifier(
+            form_data.layer_name or "layer", prefix_if_digit="layer"
+        )
+        normalized_store_name = normalize_identifier(
+            form_data.store_name or "store", prefix_if_digit="store"
+        )
         request = RegisterShapefileRequest(
             uploaded_by=form_data.uploaded_by,
-            store_name=form_data.store_name,
-            layer_name=form_data.layer_name,
+            store_name=normalized_store_name,
+            layer_name=normalized_layer_name,
             tags=tags_list,
             workspace=form_data.workspace,
             name_of_dataset=form_data.name_of_dataset,

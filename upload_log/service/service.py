@@ -2,6 +2,7 @@ from typing import List, Optional, Dict, Any, Tuple
 import logging
 import io
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -33,6 +34,86 @@ from utils.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------- Column name normalization ----------------
+
+def _normalize_column_name(raw_name: object) -> str:
+    """
+    Normalize incoming CSV/XLSX header names to safe PostgreSQL identifiers.
+
+    Why:
+    - Style generation and other parts of the system assume column identifiers that are
+      stable and safe to embed in SQL and GeoServer style names.
+    - User-provided headers often contain spaces/symbols (e.g. "(%)", "-", etc.).
+
+    Rules:
+    - lowercase
+    - replace '%' with 'pct'
+    - replace non [a-z0-9_] with '_'
+    - collapse '_' runs
+    - trim leading/trailing '_'
+    - prefix with 'col_' if starts with digit
+    """
+    name = str(raw_name).strip().lower()
+    # Common symbol normalization
+    name = name.replace("%", " pct ")
+    # Replace everything else with underscores
+    name = re.sub(r"[^a-z0-9_]+", "_", name)
+    name = re.sub(r"_+", "_", name).strip("_")
+    if not name:
+        name = "column"
+    if name[0].isdigit():
+        name = f"col_{name}"
+    return name
+
+
+def _normalize_dataframe_columns(df: "pd.DataFrame") -> Tuple["pd.DataFrame", Dict[str, str]]:
+    """
+    Return a copy of df with normalized, unique column names plus a mapping.
+    """
+    original_cols = list(df.columns)
+    seen: Dict[str, int] = {}
+    new_cols: List[str] = []
+
+    for col in original_cols:
+        base = _normalize_column_name(col)
+        candidate = base
+        i = 2
+        while candidate in seen:
+            candidate = f"{base}_{i}"
+            i += 1
+        seen[candidate] = 1
+        new_cols.append(candidate)
+
+    mapping = {str(o): n for o, n in zip(original_cols, new_cols)}
+    # Use rename on a shallow copy so callers don't accidentally retain the old headers.
+    df2 = df.copy()
+    df2.columns = new_cols
+    return df2, mapping
+
+
+def _detect_state_column(df: "pd.DataFrame") -> Optional[str]:
+    """
+    Heuristically detect which column contains state names for boundary mapping.
+    Preference order is conservative to avoid accidentally choosing an unrelated "name" column.
+    """
+    cols = [str(c) for c in df.columns]
+    preferred = [
+        "state",
+        "state_name",
+        "statename",
+        "state_nm",
+        "st_name",
+        "st_nm",
+        "province",
+        "province_name",
+        "region",
+        "region_name",
+    ]
+    for p in preferred:
+        if p in cols:
+            return p
+    return None
 
 # Initialize GeoServer services for helper functions
 _geo_dao = GeoServerDAO(
@@ -655,6 +736,17 @@ class UploadLogService:
             else:
                 df = pd.read_excel(io.BytesIO(contents))
 
+            # Normalize column names to safe identifiers (snake_case)
+            # This makes downstream style generation and SQL querying reliable.
+            df, col_mapping = _normalize_dataframe_columns(df)
+            try:
+                # Only log when something changed to avoid log spam
+                if any(str(o) != n for o, n in col_mapping.items()):
+                    logger.info("Normalized uploaded column names: %s", col_mapping)
+            except Exception:
+                # Never fail uploads due to logging issues
+                pass
+
             # Step 1: Create table dynamically
             logger.info(f"Creating table {schema}.{table_name}")
             UploadLogDAO.create_table1(table_name, schema, df, db)
@@ -692,10 +784,19 @@ class UploadLogService:
                     geometry_mapping_message = f"Geometry column populated from world_geojson using state column ({rows_updated} rows updated)."
             else:
                 # No geometry_wkt column, use state logic
-                logger.info(f"Mapping geometry from world_geojson to table {schema}.{table_name}")
-                rows_updated = UploadLogDAO.map_geometry_from_world_geojson(table_name, schema, db)
+                detected_state_col = _detect_state_column(df) or "state"
+                logger.info(
+                    "Mapping geometry from world_geojson to table %s.%s using column '%s'",
+                    schema, table_name, detected_state_col
+                )
+                # Use a safer mapping function that can work even if the user's header was "State Name"
+                rows_updated = UploadLogDAO.map_geometry_from_world_geojson_using_column(
+                    table_name, schema, db, state_column=detected_state_col
+                )
                 logger.info(f"Updated {rows_updated} rows with geometry data")
-                geometry_mapping_message = f"Geometry column populated from world_geojson using state column ({rows_updated} rows updated)."
+                geometry_mapping_message = (
+                    f"Geometry column populated from world_geojson using '{detected_state_col}' ({rows_updated} rows updated)."
+                )
 
             # Step 5: Upload to GeoServer if geo_service is provided
             geoserver_message = ""

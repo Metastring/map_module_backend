@@ -176,6 +176,15 @@ class StyleGenerateRequest(BaseModel):
     color_palette: Optional[str] = None
     custom_colors: Optional[List[str]] = None
     manual_breaks: Optional[List[float]] = None
+    fill_opacity: Optional[float] = Field(
+        None, ge=0, le=1, description="Fill opacity (0-1)"
+    )
+    stroke_color: Optional[str] = Field(
+        None, description="Stroke color (hex, e.g. #FFFFFF)"
+    )
+    stroke_width: Optional[float] = Field(
+        None, ge=0, description="Stroke width in pixels"
+    )
 
     # Publishing options
     publish_to_geoserver: bool = Field(
@@ -188,6 +197,14 @@ class StyleGenerateRequest(BaseModel):
     # User info for audit
     user_id: Optional[str] = None
     user_email: Optional[str] = None
+
+    @validator("stroke_color")
+    def validate_stroke_color(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if not re.match(r"^#[0-9A-Fa-f]{6}$", v):
+            raise ValueError(f"Invalid hex color: {v}")
+        return v
 
 
 class StyleGenerateResponse(BaseModel):
