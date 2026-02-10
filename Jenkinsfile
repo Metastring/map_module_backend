@@ -18,6 +18,7 @@ pipeline {
                   --exclude '.git/' \
                   --exclude '.env' \
                   --exclude 'env/' \
+                  --exclude 'uploads/' \
                   --exclude '__pycache__/' \
                   --exclude '*.log' \
                   --exclude '.pytest_cache/' \
