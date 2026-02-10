@@ -7,6 +7,8 @@ from sqlalchemy import text, func
 from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta, timezone
 import logging
+import math
+from decimal import Decimal
 
 from styles.models.schema import StyleMetadata, StyleAuditLog, StyleCache
 from styles.models.model import (
@@ -16,6 +18,28 @@ from styles.models.model import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _sanitize_for_json(value: Any) -> Any:
+    """
+    Recursively sanitize values before storing in a JSON column.
+    Postgres JSON does not accept NaN/Infinity tokens.
+    """
+    if value is None:
+        return None
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, Decimal):
+        try:
+            f = float(value)
+            return f if math.isfinite(f) else None
+        except Exception:
+            return None
+    if isinstance(value, dict):
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_for_json(v) for v in value]
+    return value
 
 
 class StyleDAO:
@@ -130,6 +154,7 @@ class StyleDAO:
                 COUNT("{column_name}") as count
             FROM "{schema}"."{table_name}"
             WHERE "{column_name}" IS NOT NULL
+              AND "{column_name}" = "{column_name}"  -- filters out NaN for float columns
         """)
         
         try:
@@ -171,6 +196,7 @@ class StyleDAO:
                    WITHIN GROUP (ORDER BY "{column_name}"::float)
             FROM "{schema}"."{table_name}"
             WHERE "{column_name}" IS NOT NULL
+              AND "{column_name}" = "{column_name}"  -- filters out NaN for float columns
         """)
         
         try:
@@ -209,6 +235,7 @@ class StyleDAO:
             count_query = text(f"""
                 SELECT COUNT(*) FROM "{schema}"."{table_name}" 
                 WHERE "{column_name}" IS NOT NULL
+                  AND "{column_name}" = "{column_name}"  -- filters out NaN for float columns
             """)
             count = self.db.execute(count_query).scalar()
             
@@ -218,6 +245,7 @@ class StyleDAO:
                     SELECT "{column_name}"::float
                     FROM "{schema}"."{table_name}"
                     WHERE "{column_name}" IS NOT NULL
+                      AND "{column_name}" = "{column_name}"  -- filters out NaN for float columns
                     ORDER BY "{column_name}"
                 """)
             else:
@@ -226,6 +254,7 @@ class StyleDAO:
                     SELECT "{column_name}"::float
                     FROM "{schema}"."{table_name}"
                     WHERE "{column_name}" IS NOT NULL
+                      AND "{column_name}" = "{column_name}"  -- filters out NaN for float columns
                     ORDER BY RANDOM()
                     LIMIT {sample_size}
                 """)
@@ -528,7 +557,7 @@ class StyleDAO:
         expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
         
         if cache:
-            cache.cached_data = data
+            cache.cached_data = _sanitize_for_json(data)
             cache.row_count = row_count
             cache.expires_at = expires_at
             cache.updated_at = datetime.now(timezone.utc)
@@ -537,7 +566,7 @@ class StyleDAO:
                 table_name=table_name,
                 column_name=column_name,
                 cache_type=cache_type,
-                cached_data=data,
+                cached_data=_sanitize_for_json(data),
                 row_count=row_count,
                 expires_at=expires_at
             )

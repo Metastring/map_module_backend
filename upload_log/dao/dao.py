@@ -195,6 +195,7 @@ class UploadLogDAO:
             quoted_schema = _quote_identifier(schema)
             quoted_table = _quote_identifier(table_name)
             quoted_world_geojson = _quote_identifier("world_geojson")
+            quoted_state_col = _quote_identifier("state")
             
             # SQL to update geometry from world_geojson table
             # Join on state = level_4_na (case-insensitive and whitespace-insensitive)
@@ -203,7 +204,7 @@ class UploadLogDAO:
                 UPDATE {quoted_schema}.{quoted_table} AS t
                 SET geom = ST_Multi(w.geom)::geometry(MULTIPOLYGON, 4326)
                 FROM {quoted_schema}.{quoted_world_geojson} AS w
-                WHERE LOWER(TRIM(t.state)) = LOWER(TRIM(w.level_4_na))
+                WHERE LOWER(TRIM(t.{quoted_state_col})) = LOWER(TRIM(w.level_4_na))
                 AND t.geom IS NULL
             """)
             result = db.execute(sql)
@@ -213,6 +214,46 @@ class UploadLogDAO:
             return rows_updated
         except SQLAlchemyError as e:
             logger.error(f"Error mapping geometry from world_geojson to table {schema}.{table_name}: {e}")
+            db.rollback()
+            raise e
+
+    @staticmethod
+    def map_geometry_from_world_geojson_using_column(
+        table_name: str,
+        schema: str,
+        db: Session,
+        state_column: str = "state",
+    ):
+        """
+        Same as map_geometry_from_world_geojson, but allows choosing which column
+        in the uploaded table contains the state name.
+        """
+        try:
+            quoted_schema = _quote_identifier(schema)
+            quoted_table = _quote_identifier(table_name)
+            quoted_world_geojson = _quote_identifier("world_geojson")
+            quoted_state_col = _quote_identifier(state_column)
+
+            sql = text(f"""
+                UPDATE {quoted_schema}.{quoted_table} AS t
+                SET geom = ST_Multi(w.geom)::geometry(MULTIPOLYGON, 4326)
+                FROM {quoted_schema}.{quoted_world_geojson} AS w
+                WHERE LOWER(TRIM(t.{quoted_state_col})) = LOWER(TRIM(w.level_4_na))
+                AND t.geom IS NULL
+            """)
+            result = db.execute(sql)
+            db.commit()
+            rows_updated = result.rowcount
+            logger.info(
+                "Updated %s rows with geometry from world_geojson in table %s.%s using column '%s'",
+                rows_updated, schema, table_name, state_column
+            )
+            return rows_updated
+        except SQLAlchemyError as e:
+            logger.error(
+                "Error mapping geometry from world_geojson to table %s.%s using column '%s': %s",
+                schema, table_name, state_column, e
+            )
             db.rollback()
             raise e
 

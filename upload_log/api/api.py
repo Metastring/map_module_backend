@@ -34,6 +34,7 @@ from geoserver.admin.dao import GeoServerAdminDAO
 from geoserver.admin.service import GeoServerAdminService
 from upload_log.dao.dao import UploadLogDAO
 from utils.config import geoserver_host, geoserver_port, geoserver_username, geoserver_password, geoserver_data_dir
+from utils.identifiers import normalize_identifier
 
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
@@ -674,6 +675,12 @@ async def create_table_and_insert1(
         raise HTTPException(status_code=400, detail="Only XLSX and CSV files are allowed")
 
     try:
+        # Normalize identifiers so styles + DB queries always receive safe names
+        normalized_table_name = normalize_identifier(table_name, prefix_if_digit="tbl")
+        if normalized_table_name != table_name:
+            LOGGER.info("Normalized table_name '%s' -> '%s'", table_name, normalized_table_name)
+        table_name = normalized_table_name
+
         # Generate dataset_id (will be used as id in upload_logs if logging is enabled)
         dataset_id = uuid4()
         created_log = None
@@ -685,7 +692,7 @@ async def create_table_and_insert1(
                 stored_path = await persist_upload(file, UPLOADS_DIR)
                 
                 # Resolve store_name
-                resolved_store_name = store_name or table_name
+                resolved_store_name = normalize_identifier(store_name or table_name, prefix_if_digit="store")
                 
                 # Determine file format from filename
                 file_format = "csv" if stored_path.suffix.lower() == ".csv" else "xlsx"
@@ -730,7 +737,7 @@ async def create_table_and_insert1(
                 db=db,
                 geo_service=geo_service,
                 workspace=workspace,
-                store_name=store_name,
+                store_name=normalize_identifier(store_name or f"{table_name}_store", prefix_if_digit="store"),
                 dataset_id=dataset_id,  # Use the generated dataset_id
                 upload_log_id=created_log.id if created_log else None
             )

@@ -97,8 +97,27 @@ class StyleService:
                     color_palette=request.color_palette or "YlOrRd",
                     custom_colors=request.custom_colors,
                     manual_breaks=request.manual_breaks,
+                    fill_opacity=request.fill_opacity if request.fill_opacity is not None else 0.7,
+                    stroke_color=request.stroke_color if request.stroke_color is not None else "#333333",
+                    stroke_width=request.stroke_width if request.stroke_width is not None else 1.0,
                 )
                 style_metadata = self.dao.create_style_metadata(create_data)
+            else:
+                # Apply visual overrides to existing metadata if explicitly provided.
+                # This ensures outlines/opacity can be controlled (e.g. avoid dark/black strokes).
+                changed = False
+                if request.fill_opacity is not None and style_metadata.fill_opacity != request.fill_opacity:
+                    style_metadata.fill_opacity = request.fill_opacity
+                    changed = True
+                if request.stroke_color is not None and style_metadata.stroke_color != request.stroke_color:
+                    style_metadata.stroke_color = request.stroke_color
+                    changed = True
+                if request.stroke_width is not None and style_metadata.stroke_width != request.stroke_width:
+                    style_metadata.stroke_width = request.stroke_width
+                    changed = True
+                if changed:
+                    self.db.commit()
+                    self.db.refresh(style_metadata)
             
             # Step 2: Get layer type from geometry if not specified
             layer_type = request.layer_type
