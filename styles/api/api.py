@@ -152,9 +152,12 @@ async def get_legend(
                                 else:
                                     # No default color, add transparent one
                                     expression.append("rgba(0,0,0,0)")
-                            # Keep match expressions in original Mapbox GL format to preserve default color behavior
-                            # The frontend needs the match format to properly handle the transparent default
-                            paint[paint_key] = expression
+                            # Transform match expression to stops format with default color included
+                            paint[paint_key] = _transform_color_expression(
+                                expression, 
+                                style.color_by,
+                                style.classification_method.value if style.classification_method else None
+                            )
                         else:
                             # Transform step expressions or other types to stops format
                             paint[paint_key] = _transform_color_expression(
@@ -367,6 +370,11 @@ def _transform_color_expression(
             if expression[1][0] == "get":
                 extracted_property = expression[1][1]
         
+        # Extract default color if it exists
+        default_color = None
+        if len(expression) % 2 == 1:  # Has default color at the end (odd number of elements after match and get)
+            default_color = expression[-1]
+        
         # Extract value-color pairs (skip ["match", ["get", "prop"]] and default color at end)
         stops = []
         i = 2  # Start after ["match", ["get", "prop"]]
@@ -377,11 +385,17 @@ def _transform_color_expression(
                 stops.append([value, color])
             i += 2
         
-        return {
+        result = {
             "property": extracted_property,
             "type": "categorical",
             "stops": stops
         }
+        
+        # Add default color to the stops format object so frontend can use it for unmatched values
+        if default_color:
+            result["default"] = default_color
+        
+        return result
     
     elif expr_type == "step":
         # Extract property name from ["get", "property"]
