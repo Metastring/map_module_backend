@@ -152,7 +152,12 @@ async def get_legend(
                                 # Replace any visible default colors with transparent
                                 if default_color in ["#999999", "#000000", "#333333", "#666666", "#e0e0e0"] or not default_color:
                                     expression[-1] = "rgba(0,0,0,0)"  # Transparent - unmatched features won't be visible
-                            paint[paint_key] = expression
+                            # Transform match expression to stops format
+                            paint[paint_key] = _transform_color_expression(
+                                expression, 
+                                style.color_by,
+                                style.classification_method.value if style.classification_method else None
+                            )
                         else:
                             # Transform step expressions or other types to stops format
                             paint[paint_key] = _transform_color_expression(
