@@ -136,7 +136,7 @@ async def get_legend(
                 layer["source-layer"] = style.layer_table_name
                 
                 # Transform color expressions to stops format for frontend
-                # Note: Match expressions (categorical) are kept in original Mapbox GL format
+                # Note: Match expressions with default colors are kept in original Mapbox GL format
                 # Step expressions (numeric) are transformed to stops format
                 paint = layer.get("paint", {})
                 for paint_key in ["fill-color", "circle-color", "line-color"]:
@@ -144,14 +144,16 @@ async def get_legend(
                         expression = paint[paint_key]
                         # Check if it's a match expression (categorical data)
                         if isinstance(expression, list) and len(expression) > 0 and expression[0] == "match":
-                            # Keep match expressions in original Mapbox GL format
                             # Set default color to transparent so unmatched values don't hide matched ones
-                            if len(expression) > 2 and len(expression) % 2 == 1:
-                                # Has default color at the end
-                                default_color = expression[-1]
-                                # Replace any visible default colors with transparent
-                                if default_color in ["#999999", "#000000", "#333333", "#666666", "#e0e0e0"] or not default_color:
+                            if len(expression) > 2:
+                                if len(expression) % 2 == 1:
+                                    # Has default color at the end - always set to transparent
                                     expression[-1] = "rgba(0,0,0,0)"  # Transparent - unmatched features won't be visible
+                                else:
+                                    # No default color, add transparent one
+                                    expression.append("rgba(0,0,0,0)")
+                            # Keep match expressions in original Mapbox GL format to preserve default color behavior
+                            # The frontend needs the match format to properly handle the transparent default
                             paint[paint_key] = expression
                         else:
                             # Transform step expressions or other types to stops format
