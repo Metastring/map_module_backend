@@ -146,12 +146,13 @@ async def get_legend(
                         if isinstance(expression, list) and len(expression) > 0 and expression[0] == "match":
                             # Keep match expressions in original Mapbox GL format
                             # Set default color to transparent so unmatched values don't hide matched ones
-                            if len(expression) > 2 and len(expression) % 2 == 1:
-                                # Has default color at the end
-                                default_color = expression[-1]
-                                # Replace any visible default colors with transparent
-                                if default_color in ["#999999", "#000000", "#333333", "#666666", "#e0e0e0"] or not default_color:
+                            if len(expression) > 2:
+                                if len(expression) % 2 == 1:
+                                    # Has default color at the end - always set to transparent
                                     expression[-1] = "rgba(0,0,0,0)"  # Transparent - unmatched features won't be visible
+                                else:
+                                    # No default color, add transparent one
+                                    expression.append("rgba(0,0,0,0)")
                             # Transform match expression to stops format
                             paint[paint_key] = _transform_color_expression(
                                 expression, 
