@@ -240,8 +240,8 @@ class MBStyleBuilder:
             else:
                 expression.append(classification.colors[-1])
         
-        # Default color (for unmatched values)
-        expression.append("#999999")
+        # Default color (for unmatched values) - use transparent so matched colors are visible
+        expression.append("rgba(0,0,0,0)")
         
         return expression
 

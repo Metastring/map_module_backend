@@ -22,6 +22,11 @@ dist/
 # Logs
 *.log
 
+# Data files (uploads/exports)
+*.csv
+*.xlsx
+*.xls
+
 # OS files
 .DS_Store
 Thumbs.db

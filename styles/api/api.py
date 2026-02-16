@@ -135,15 +135,31 @@ async def get_legend(
                 layer["source"] = source_name
                 layer["source-layer"] = style.layer_table_name
                 
-                # Transform color expressions to stops format
+                # Transform color expressions to stops format for frontend
+                # Note: Match expressions (categorical) are kept in original Mapbox GL format
+                # Step expressions (numeric) are transformed to stops format
                 paint = layer.get("paint", {})
                 for paint_key in ["fill-color", "circle-color", "line-color"]:
                     if paint_key in paint:
-                        paint[paint_key] = _transform_color_expression(
-                            paint[paint_key], 
-                            style.color_by,
-                            style.classification_method.value if style.classification_method else None
-                        )
+                        expression = paint[paint_key]
+                        # Check if it's a match expression (categorical data)
+                        if isinstance(expression, list) and len(expression) > 0 and expression[0] == "match":
+                            # Keep match expressions in original Mapbox GL format
+                            # Set default color to transparent so unmatched values don't hide matched ones
+                            if len(expression) > 2 and len(expression) % 2 == 1:
+                                # Has default color at the end
+                                default_color = expression[-1]
+                                # Replace any visible default colors with transparent
+                                if default_color in ["#999999", "#000000", "#333333", "#666666", "#e0e0e0"] or not default_color:
+                                    expression[-1] = "rgba(0,0,0,0)"  # Transparent - unmatched features won't be visible
+                            paint[paint_key] = expression
+                        else:
+                            # Transform step expressions or other types to stops format
+                            paint[paint_key] = _transform_color_expression(
+                                expression, 
+                                style.color_by,
+                                style.classification_method.value if style.classification_method else None
+                            )
         
         return mbstyle
         
