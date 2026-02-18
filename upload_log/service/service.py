@@ -115,6 +115,46 @@ def _detect_state_column(df: "pd.DataFrame") -> Optional[str]:
             return p
     return None
 
+
+def _detect_lat_long_columns(df: "pd.DataFrame") -> Optional[tuple[str, str]]:
+    """
+    Heuristically detect which columns contain latitude and longitude.
+    Returns (lat_column, long_column) if found, None otherwise.
+    """
+    cols = [str(c).lower() for c in df.columns]
+    col_map = {str(c).lower(): str(c) for c in df.columns}  # Map lowercase to original
+    
+    # Common latitude column names
+    lat_candidates = [
+        "latitude", "lat", "y", "decimallatitude", "decimal_latitude",
+        "latitudedecimal", "latitude_decimal"
+    ]
+    
+    # Common longitude column names
+    long_candidates = [
+        "longitude", "lon", "lng", "long", "x", "decimallongitude", "decimal_longitude",
+        "longitudedecimal", "longitude_decimal"
+    ]
+    
+    lat_col = None
+    long_col = None
+    
+    # Find latitude column
+    for candidate in lat_candidates:
+        if candidate in cols:
+            lat_col = col_map[candidate]
+            break
+    
+    # Find longitude column
+    for candidate in long_candidates:
+        if candidate in cols:
+            long_col = col_map[candidate]
+            break
+    
+    if lat_col and long_col:
+        return (lat_col, long_col)
+    return None
+
 # Initialize GeoServer services for helper functions
 _geo_dao = GeoServerDAO(
     base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
@@ -755,15 +795,11 @@ class UploadLogService:
             logger.info(f"Inserting data into table {schema}.{table_name} with dataset_id: {dataset_id}")
             UploadLogDAO.insert_data_dynamic1(table_name, schema, df, db, dataset_id)
 
-            # Step 3: Add geometry column
-            logger.info(f"Adding geometry column to table {schema}.{table_name}")
-            UploadLogDAO.add_geometry_column(table_name, schema, db)
-
-            # Step 4: Map geometry - prioritize geometry_wkt over state
-            # If geometry_wkt column exists and has data, use it and skip state logic
-            # Otherwise, use state logic
+            # Step 3: Add geometry column and map geometry
+            # Priority: 1) geometry_wkt, 2) lat/long columns (point data), 3) state column (polygon data)
             geometry_mapping_message = ""
             has_geometry_wkt = "geometry_wkt" in df.columns
+            lat_long_cols = _detect_lat_long_columns(df)
             
             if has_geometry_wkt:
                 # Check if geometry_wkt column has any non-null, non-empty values
@@ -771,19 +807,47 @@ class UploadLogService:
                 
                 if has_wkt_data:
                     # Use geometry_wkt column - convert WKT to MULTIPOLYGON
-                    # Skip state logic when geometry_wkt is present (as per requirements)
+                    logger.info(f"Adding MULTIPOLYGON geometry column to table {schema}.{table_name}")
+                    UploadLogDAO.add_geometry_column(table_name, schema, db, geometry_type="MULTIPOLYGON")
                     logger.info(f"Mapping geometry from geometry_wkt column to table {schema}.{table_name} (skipping state logic)")
                     rows_updated = UploadLogDAO.map_geometry_from_wkt(table_name, schema, db)
                     logger.info(f"Updated {rows_updated} rows with geometry from geometry_wkt")
                     geometry_mapping_message = f"Geometry column populated from geometry_wkt ({rows_updated} rows updated)."
                 else:
-                    # geometry_wkt column exists but has no data, fall back to state logic
-                    logger.info(f"geometry_wkt column exists but has no data, falling back to state-based mapping")
-                    rows_updated = UploadLogDAO.map_geometry_from_world_geojson(table_name, schema, db)
-                    logger.info(f"Updated {rows_updated} rows with geometry from world_geojson")
-                    geometry_mapping_message = f"Geometry column populated from world_geojson using state column ({rows_updated} rows updated)."
+                    # geometry_wkt column exists but has no data, check for lat/long
+                    if lat_long_cols:
+                        lat_col, long_col = lat_long_cols
+                        logger.info(f"Adding POINT geometry column to table {schema}.{table_name}")
+                        UploadLogDAO.add_geometry_column(table_name, schema, db, geometry_type="POINT")
+                        logger.info(f"Mapping geometry from lat/long columns ({lat_col}, {long_col}) to table {schema}.{table_name}")
+                        rows_updated = UploadLogDAO.map_geometry_from_lat_long(
+                            table_name, schema, db, lat_column=lat_col, long_column=long_col
+                        )
+                        logger.info(f"Updated {rows_updated} rows with POINT geometry from lat/long")
+                        geometry_mapping_message = f"Geometry column populated from lat/long columns ({lat_col}, {long_col}) ({rows_updated} rows updated)."
+                    else:
+                        # Fall back to state logic
+                        logger.info(f"Adding MULTIPOLYGON geometry column to table {schema}.{table_name}")
+                        UploadLogDAO.add_geometry_column(table_name, schema, db, geometry_type="MULTIPOLYGON")
+                        logger.info(f"geometry_wkt column exists but has no data, falling back to state-based mapping")
+                        rows_updated = UploadLogDAO.map_geometry_from_world_geojson(table_name, schema, db)
+                        logger.info(f"Updated {rows_updated} rows with geometry from world_geojson")
+                        geometry_mapping_message = f"Geometry column populated from world_geojson using state column ({rows_updated} rows updated)."
+            elif lat_long_cols:
+                # No geometry_wkt, but lat/long columns found - create POINT geometry
+                lat_col, long_col = lat_long_cols
+                logger.info(f"Adding POINT geometry column to table {schema}.{table_name}")
+                UploadLogDAO.add_geometry_column(table_name, schema, db, geometry_type="POINT")
+                logger.info(f"Mapping geometry from lat/long columns ({lat_col}, {long_col}) to table {schema}.{table_name}")
+                rows_updated = UploadLogDAO.map_geometry_from_lat_long(
+                    table_name, schema, db, lat_column=lat_col, long_column=long_col
+                )
+                logger.info(f"Updated {rows_updated} rows with POINT geometry from lat/long")
+                geometry_mapping_message = f"Geometry column populated from lat/long columns ({lat_col}, {long_col}) ({rows_updated} rows updated)."
             else:
-                # No geometry_wkt column, use state logic
+                # No geometry_wkt or lat/long, use state logic for polygon mapping (existing distribution data logic)
+                logger.info(f"Adding MULTIPOLYGON geometry column to table {schema}.{table_name}")
+                UploadLogDAO.add_geometry_column(table_name, schema, db, geometry_type="MULTIPOLYGON")
                 detected_state_col = _detect_state_column(df) or "state"
                 logger.info(
                     "Mapping geometry from world_geojson to table %s.%s using column '%s'",

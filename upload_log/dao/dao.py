@@ -169,20 +169,29 @@ class UploadLogDAO:
             raise e
 
     @staticmethod
-    def add_geometry_column(table_name: str, schema: str, db: Session):
+    def add_geometry_column(table_name: str, schema: str, db: Session, geometry_type: str = "MULTIPOLYGON"):
+        """
+        Add a geometry column to the table.
+        
+        Args:
+            table_name: Name of the table
+            schema: Database schema
+            db: Database session
+            geometry_type: Type of geometry (POINT, MULTIPOLYGON, etc.). Defaults to MULTIPOLYGON.
+        """
         try:
             # Quote identifiers to prevent SQL injection
             quoted_schema = _quote_identifier(schema)
             quoted_table = _quote_identifier(table_name)
             
-            # SQL to add geometry column with SRID 4326 as MULTIPOLYGON
+            # SQL to add geometry column with SRID 4326
             sql = text(f"""
                 ALTER TABLE {quoted_schema}.{quoted_table} 
-                ADD COLUMN IF NOT EXISTS geom geometry(MULTIPOLYGON, 4326)
+                ADD COLUMN IF NOT EXISTS geom geometry({geometry_type}, 4326)
             """)
             db.execute(sql)
             db.commit()
-            logger.info(f"Geometry column 'geom' added to table {schema}.{table_name}")
+            logger.info(f"Geometry column 'geom' added to table {schema}.{table_name} with type {geometry_type}")
         except SQLAlchemyError as e:
             logger.error(f"Error adding geometry column to table {schema}.{table_name}: {e}")
             db.rollback()
@@ -290,3 +299,46 @@ class UploadLogDAO:
             db.rollback()
             raise e
 
+    @staticmethod
+    def map_geometry_from_lat_long(
+        table_name: str,
+        schema: str,
+        db: Session,
+        lat_column: str,
+        long_column: str,
+    ):
+        """
+        Create POINT geometries from latitude and longitude columns.
+        Uses ST_SetSRID(ST_MakePoint(longitude, latitude), 4326) to create points.
+        """
+        try:
+            quoted_schema = _quote_identifier(schema)
+            quoted_table = _quote_identifier(table_name)
+            quoted_lat_col = _quote_identifier(lat_column)
+            quoted_long_col = _quote_identifier(long_column)
+            
+            # SQL to create POINT geometries from lat/long
+            # ST_MakePoint takes (longitude, latitude) - note the order!
+            # Only update rows where both lat and long are not null and geom is null
+            sql = text(f"""
+                UPDATE {quoted_schema}.{quoted_table} AS t
+                SET geom = ST_SetSRID(ST_MakePoint(t.{quoted_long_col}, t.{quoted_lat_col}), 4326)::geometry(POINT, 4326)
+                WHERE t.{quoted_lat_col} IS NOT NULL
+                AND t.{quoted_long_col} IS NOT NULL
+                AND t.geom IS NULL
+            """)
+            result = db.execute(sql)
+            db.commit()
+            rows_updated = result.rowcount
+            logger.info(
+                "Updated %s rows with POINT geometry from lat/long columns (%s, %s) in table %s.%s",
+                rows_updated, lat_column, long_column, schema, table_name
+            )
+            return rows_updated
+        except SQLAlchemyError as e:
+            logger.error(
+                "Error mapping geometry from lat/long to table %s.%s using columns '%s', '%s': %s",
+                schema, table_name, lat_column, long_column, e
+            )
+            db.rollback()
+            raise e
