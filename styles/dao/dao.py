@@ -279,7 +279,7 @@ class StyleDAO:
         table_name: str, 
         column_name: str, 
         schema: str = DEFAULT_DB_SCHEMA,
-        limit: int = 100
+        limit: int = 2000
     ) -> List[str]:
         """
         Get distinct values for a categorical column.
@@ -709,7 +709,7 @@ class StyleDAO:
         self, 
         layer_name: str, 
         column_name: str,
-        limit: int = 100,
+        limit: int = 2000,
         sample_size: int = 10000
     ) -> List[str]:
         """

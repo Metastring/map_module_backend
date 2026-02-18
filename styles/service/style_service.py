@@ -399,13 +399,15 @@ class StyleService:
         # Get distinct values based on data source
         if data_source == DataSource.POSTGIS:
             categories = self.dao.get_distinct_values(
-                table_name, column_name, schema
+                table_name, column_name, schema,
+                limit=2000
             )
         else:
             # GeoServer source
             layer_name = f"{workspace}:{table_name}"
             categories = self.dao.get_distinct_values_geoserver(
-                layer_name, column_name
+                layer_name, column_name,
+                limit=2000
             )
         
         # Validate categories - prevent division by zero if empty
