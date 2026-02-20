@@ -279,7 +279,7 @@ class StyleDAO:
         table_name: str, 
         column_name: str, 
         schema: str = DEFAULT_DB_SCHEMA,
-        limit: int = 2000
+        limit: int = 22000
     ) -> List[str]:
         """
         Get distinct values for a categorical column.
@@ -709,8 +709,8 @@ class StyleDAO:
         self, 
         layer_name: str, 
         column_name: str,
-        limit: int = 2000,
-        sample_size: int = 10000
+        limit: int = 22000,
+        sample_size: int = 100000
     ) -> List[str]:
         """
         Get distinct values for a categorical column from GeoServer layer via WFS.
