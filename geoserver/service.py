@@ -156,7 +156,7 @@ class GeoServerService:
         """
         Resolve dataset names to existing GeoServer layer names and return tile URLs.
         Strategy: fetch all layers, then for each dataset find a layer whose
-        name is exactly the dataset or ends with ":{dataset}". Return URL map.
+        name matches the dataset (either original or mapped name). Return URL map.
         """
         response = self.dao.list_layers()
         if response.status_code != 200:
@@ -174,12 +174,26 @@ class GeoServerService:
         results: Dict[str, str] = {}
         for ds in datasets:
             # Map frontend dataset name to actual layer/table name if provided
-            target = DATASET_MAPPING.get(ds, ds)
+            mapped_target = DATASET_MAPPING.get(ds, ds)
+            # Check both original dataset name and mapped name
+            candidates = [ds, mapped_target] if ds != mapped_target else [ds]
+            
             match = None
             for lname in layer_names:
-                if lname == target or lname.endswith(f":{target}"):
-                    match = lname
+                # Extract layer name part (after workspace prefix, if any)
+                layer_name_part = lname.split(":")[-1] if ":" in lname else lname
+                
+                # Check if layer matches any candidate (exact match or with workspace prefix)
+                for candidate in candidates:
+                    if (lname == candidate or 
+                        lname.endswith(f":{candidate}") or
+                        layer_name_part == candidate):
+                        match = lname
+                        break
+                
+                if match:
                     break
+            
             if match:
                 results[ds] = self.get_tile_layer_url(match)
             else:
