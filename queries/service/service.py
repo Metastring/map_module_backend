@@ -1,5 +1,6 @@
 from typing import List
 import math
+import uuid
 from shapely.geometry import Polygon, MultiPolygon
 from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_scientific_name_matches_from_datasets
 from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
@@ -22,6 +23,8 @@ def clean_nan_values(obj):
 		return [clean_nan_values(i) for i in obj]
 	elif isinstance(obj, float) and math.isnan(obj):
 		return None
+	elif isinstance(obj, uuid.UUID):
+		return str(obj)
 	return obj
 
 
@@ -52,8 +55,9 @@ def fetch_multi_polygon_query(dataset: List[str], polygon_detail: List[dict], li
 	if not polygon_detail:
 		return {"results": {}}
 
-	# Map frontend dataset names to database table names
-	mapped_datasets = map_dataset_names(dataset)
+	# Use dataset names directly without mapping
+	# This allows "kew" to be used as-is instead of mapping to "kew_with_geom"
+	datasets_to_query = dataset
 
 	# Handle multiple polygons
 	polygons = []
@@ -78,13 +82,12 @@ def fetch_multi_polygon_query(dataset: List[str], polygon_detail: List[dict], li
 	else:
 		geometry = MultiPolygon(polygons)
 
-	raw_results_by_table = get_multi_polygon_data_from_datasets(mapped_datasets, geometry, limit, offset)
+	raw_results_by_table = get_multi_polygon_data_from_datasets(datasets_to_query, geometry, limit, offset)
 
-	# Normalize keys back to frontend names and clean values
+	# Use dataset names directly without reverse mapping
 	results_by_frontend: dict = {}
 	for table_name, rows in raw_results_by_table.items():
-		frontend_name = REVERSE_DATASET_MAPPING.get(table_name, table_name)
-		results_by_frontend[frontend_name] = clean_nan_values(rows)
+		results_by_frontend[table_name] = clean_nan_values(rows)
 
 	return {"results": results_by_frontend}
 
