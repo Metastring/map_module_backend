@@ -101,3 +101,43 @@ def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: lis
 			res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})
 			results_by_dataset[table] = [dict(row._mapping) for row in res]
 	return results_by_dataset
+
+# Get column names from database schema for a given table
+def get_table_column_names(table_name: str) -> List[str]:
+	"""
+	Get column names from database schema for a given table.
+	Returns list of column names including computed columns based on table type.
+	Returns empty list if table doesn't exist.
+	"""
+	column_names = []
+	try:
+		with engine.connect() as conn:
+			# Get base table columns
+			query = text(f"""
+				SELECT column_name
+				FROM information_schema.columns
+				WHERE table_schema = :schema
+				AND table_name = :table_name
+				ORDER BY ordinal_position
+			""")
+			res = conn.execute(query, {"schema": SCHEMA, "table_name": table_name})
+			base_columns = [row[0] for row in res]
+			column_names.extend(base_columns)
+			
+			# Add computed columns based on table type
+			if table_name == "gbif":
+				# For gbif, add longitude and latitude (computed from geom)
+				if "longitude" not in column_names:
+					column_names.append("longitude")
+				if "latitude" not in column_names:
+					column_names.append("latitude")
+			else:
+				# For other tables, add geom_geojson (computed from geom)
+				if "geom_geojson" not in column_names:
+					column_names.append("geom_geojson")
+	except Exception as e:
+		# If table doesn't exist or query fails, return empty list
+		print(f"Warning: Could not fetch column names for table {table_name}: {e}")
+		return []
+	
+	return column_names
