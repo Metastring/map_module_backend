@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from geoserver.api import router as geoserver_router  # Import router directly
 from geoserver.admin.api import router as geoserver_admin_router  # Import admin router
 from upload_log.api.api import router as upload_log_router
+from data_ingestion.api.api import data_ingestion_api
 
 # Import the new spatial queries API
 from queries.api.api import SpatialQueryAPI1  # Import the original API for comparison
@@ -46,6 +47,7 @@ app.include_router(upload_log_router, prefix="/upload_log", tags=["upload-log"])
 app.include_router(metadata_app, prefix="/metadata", tags=["metadata-graphql"])  # Add metadata GraphQL endpoint
 app.include_router(styles_router, prefix="/styles", tags=["styles"])
 app.include_router(register_dataset_router, prefix="/register_dataset", tags=["register-dataset"]) 
+app.include_router(data_ingestion_api.router, prefix="/data_ingestion", tags=["data-ingestion"])
 
 # Add health check endpoint for GraphQL service
 @app.get("/health")
