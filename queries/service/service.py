@@ -2,7 +2,7 @@ from typing import List
 import math
 import uuid
 from shapely.geometry import Polygon, MultiPolygon
-from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_scientific_name_matches_from_datasets, get_table_column_names
+from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_all_data_from_datasets, get_scientific_name_matches_from_datasets, get_table_column_names
 from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
 
 
@@ -29,11 +29,17 @@ def clean_nan_values(obj):
 
 
 def fetch_polygon_query(dataset: List[str], polygon_detail: List[dict], limit: int = 1000, offset: int = 0):
-	if not polygon_detail:
-		return {"results": {}}
-
 	# Map frontend dataset names to database table names
 	mapped_datasets = map_dataset_names(dataset)
+
+	# When no polygon provided: return all data for the selected dataset(s)
+	if not polygon_detail:
+		raw_results_by_table = get_all_data_from_datasets(mapped_datasets, limit, offset)
+		results_by_frontend: dict = {}
+		for table_name, rows in raw_results_by_table.items():
+			frontend_name = REVERSE_DATASET_MAPPING.get(table_name, table_name)
+			results_by_frontend[frontend_name] = clean_nan_values(rows)
+		return {"results": results_by_frontend}
 
 	# Extract polygon coordinates (first polygon only)
 	coordinates = polygon_detail[0].geometry.coordinates[0]  # Exterior ring only
@@ -52,12 +58,14 @@ def fetch_polygon_query(dataset: List[str], polygon_detail: List[dict], limit: i
 
 
 def fetch_multi_polygon_query(dataset: List[str], polygon_detail: List[dict], limit: int = 1000, offset: int = 0):
-	if not polygon_detail:
-		return {"results": {}}
-
 	# Use dataset names directly without mapping
-	# This allows "kew" to be used as-is instead of mapping to "kew_with_geom"
 	datasets_to_query = dataset
+
+	# When no polygon(s) provided: return all data for the selected dataset(s)
+	if not polygon_detail:
+		raw_results_by_table = get_all_data_from_datasets(datasets_to_query, limit, offset)
+		results_by_frontend = {table_name: clean_nan_values(rows) for table_name, rows in raw_results_by_table.items()}
+		return {"results": results_by_frontend}
 
 	# Handle multiple polygons
 	polygons = []
@@ -160,12 +168,20 @@ def transform_results_with_display_fields(results_by_frontend: dict, mapped_data
 def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_detail: List[dict], limit: int = 1000, offset: int = 0):
 	"""
 	Same as fetch_multi_polygon_query but returns data in format with display_fields.
+	When polygon_detail is missing or empty, returns all data for the selected dataset(s).
 	"""
-	if not polygon_detail:
-		return {"results": {}}
-
 	# Map frontend dataset names to database table names
 	mapped_datasets = map_dataset_names(dataset)
+
+	# When no polygon(s) provided: return all data for the selected dataset(s)
+	if not polygon_detail:
+		raw_results_by_table = get_all_data_from_datasets(mapped_datasets, limit, offset)
+		results_by_frontend: dict = {}
+		for table_name, rows in raw_results_by_table.items():
+			frontend_name = REVERSE_DATASET_MAPPING.get(table_name, table_name)
+			results_by_frontend[frontend_name] = clean_nan_values(rows)
+		transformed_results = transform_results_with_display_fields(results_by_frontend, mapped_datasets, dataset)
+		return {"results": transformed_results}
 
 	# Handle multiple polygons
 	polygons = []

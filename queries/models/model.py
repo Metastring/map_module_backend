@@ -21,7 +21,7 @@ class PolygonDetailInput:
 @strawberry.input
 class SpatialQueryInput:
     dataset: List[str]
-    polygon_detail: List[PolygonDetailInput]
+    polygon_detail: Optional[List[PolygonDetailInput]] = None  # When null/omitted, returns all data for selected dataset(s)
     limit: Optional[int] = 1000
     offset: Optional[int] = 0
     category: Optional[str] = None  # New field for frontend input

@@ -11,7 +11,7 @@ class SpatialQueryAPI1:
 # GraphQL Query Class
 @strawberry.type(description="GraphQL queries for spatial data retrieval")
 class Query:
-    @strawberry.field(description="Query spatial data within a single polygon boundary. Returns data points and features that intersect with the provided polygon geometry from specified datasets.")
+    @strawberry.field(description="Query spatial data within a single polygon boundary. Returns data points and features that intersect with the provided polygon geometry from specified datasets. When polygonDetail is omitted or empty, returns all data for the selected dataset(s).")
     def getPolygonData(self, input: SpatialQueryInput) -> SpatialQueryType:
         try:
             result = fetch_polygon_query(
@@ -24,13 +24,9 @@ class Query:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    @strawberry.field(description="Query spatial data within multiple polygon boundaries. Accepts an array of polygons and returns data points and features that intersect with any of the provided polygons from specified datasets. Useful for querying non-contiguous regions.")
+    @strawberry.field(description="Query spatial data within multiple polygon boundaries. Accepts an array of polygons and returns data points and features that intersect with any of the provided polygons from specified datasets. When polygonDetail is omitted or empty, returns all data for the selected dataset(s).")
     def getMultiPolygonData(self, input: SpatialQueryInput) -> SpatialQueryType:
         try:
-            # Validate that at least one polygon is provided
-            if not input.polygon_detail or len(input.polygon_detail) == 0:
-                raise HTTPException(status_code=400, detail="At least one polygon must be provided")
-            
             result = fetch_multi_polygon_query(
                 dataset=input.dataset,
                 polygon_detail=input.polygon_detail,
@@ -53,13 +49,9 @@ class Query:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    @strawberry.field(description="Query spatial data within multiple polygon boundaries with display fields. Accepts an array of polygons and returns data points and features that intersect with any of the provided polygons from specified datasets. Response includes display_fields for each dataset.")
+    @strawberry.field(description="Query spatial data within multiple polygon boundaries with display fields. Accepts an array of polygons and returns data points and features that intersect with any of the provided polygons from specified datasets. Response includes display_fields for each dataset. When polygonDetail is omitted or empty, returns all data for the selected dataset(s).")
     def getMultiPolygonDataWithDisplayFields(self, input: SpatialQueryInput) -> SpatialQueryType:
         try:
-            # Validate that at least one polygon is provided
-            if not input.polygon_detail or len(input.polygon_detail) == 0:
-                raise HTTPException(status_code=400, detail="At least one polygon must be provided")
-            
             result = fetch_multi_polygon_query_with_display_fields(
                 dataset=input.dataset,
                 polygon_detail=input.polygon_detail,

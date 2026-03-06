@@ -77,6 +77,32 @@ def get_multi_polygon_data_from_datasets(dataset: List[str], polygon: Union[Poly
 			results_by_dataset[table] = [dict(row._mapping) for row in res]
 	return results_by_dataset
 
+
+# Returns all data from datasets (no geometry filter). Used when no polygon is provided.
+def get_all_data_from_datasets(dataset: List[str], limit: int = 1000, offset: int = 0) -> Dict[str, List[Dict]]:
+	results_by_dataset: Dict[str, List[Dict]] = {}
+	with engine.connect() as conn:
+		for table in dataset:
+			if table == "gbif":
+				query = text(f"""
+					SELECT t.*,
+					       ST_X(t.geom) AS longitude,
+					       ST_Y(t.geom) AS latitude
+					FROM {SCHEMA}.{table} t
+					LIMIT :limit OFFSET :offset
+				""")
+			else:
+				query = text(f"""
+					SELECT t.*,
+					       ST_AsGeoJSON(t.geom) AS geom_geojson
+					FROM {SCHEMA}.{table} t
+					LIMIT :limit OFFSET :offset
+				""")
+			res = conn.execute(query, {"limit": limit, "offset": offset})
+			results_by_dataset[table] = [dict(row._mapping) for row in res]
+	return results_by_dataset
+
+
 # Accepts a scientific name and returns matching names with longitude and latitude from both datasets
 
 def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: list = ["gbif", "kew_with_geom"]) -> Dict[str, List[Dict]]:
