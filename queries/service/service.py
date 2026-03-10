@@ -8,7 +8,7 @@ from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
 # Curated display_fields per dataset (only these columns appear under display_fields in the API response)
 DISPLAY_FIELDS_BY_DATASET = {
 	"gbif": ["scientificname", "eventdate", "basisofrecord", "countrycode"],
-	"kew": ["scientificName", "continent", "region", "area"],
+	"kew": ["scientific_name", "continent", "region", "area"],
 	"cpmp": ["plant_id", "family", "genus", "species", "author", "state"],
 }
 
@@ -175,18 +175,16 @@ def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_de
 	"""
 	Same as fetch_multi_polygon_query but returns data in format with display_fields.
 	When polygon_detail is missing or empty, returns all data for the selected dataset(s).
+	Uses dataset names directly as table names (no mapping) so response column names match getMultiPolygonData.
 	"""
-	# Map frontend dataset names to database table names
-	mapped_datasets = map_dataset_names(dataset)
+	# Use dataset names directly as table names, same as fetch_multi_polygon_query (no kew -> kew_with_geom mapping)
+	datasets_to_query = dataset
 
 	# When no polygon(s) provided: return all data for the selected dataset(s)
 	if not polygon_detail:
-		raw_results_by_table = get_all_data_from_datasets(mapped_datasets, limit, offset)
-		results_by_frontend: dict = {}
-		for table_name, rows in raw_results_by_table.items():
-			frontend_name = REVERSE_DATASET_MAPPING.get(table_name, table_name)
-			results_by_frontend[frontend_name] = clean_nan_values(rows)
-		transformed_results = transform_results_with_display_fields(results_by_frontend, mapped_datasets, dataset)
+		raw_results_by_table = get_all_data_from_datasets(datasets_to_query, limit, offset)
+		results_by_frontend = {table_name: clean_nan_values(rows) for table_name, rows in raw_results_by_table.items()}
+		transformed_results = transform_results_with_display_fields(results_by_frontend, datasets_to_query, dataset)
 		return {"results": transformed_results}
 
 	# Handle multiple polygons
@@ -212,15 +210,11 @@ def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_de
 	else:
 		geometry = MultiPolygon(polygons)
 
-	raw_results_by_table = get_multi_polygon_data_from_datasets(mapped_datasets, geometry, limit, offset)
+	raw_results_by_table = get_multi_polygon_data_from_datasets(datasets_to_query, geometry, limit, offset)
 
-	# Normalize keys back to frontend names and clean values
-	results_by_frontend: dict = {}
-	for table_name, rows in raw_results_by_table.items():
-		frontend_name = REVERSE_DATASET_MAPPING.get(table_name, table_name)
-		results_by_frontend[frontend_name] = clean_nan_values(rows)
+	# Use table names directly (no reverse mapping), same as fetch_multi_polygon_query
+	results_by_frontend = {table_name: clean_nan_values(rows) for table_name, rows in raw_results_by_table.items()}
 
-	# Transform to include display_fields (pass mapped_datasets and frontend datasets to get table names for schema queries)
-	transformed_results = transform_results_with_display_fields(results_by_frontend, mapped_datasets, dataset)
+	transformed_results = transform_results_with_display_fields(results_by_frontend, datasets_to_query, dataset)
 
 	return {"results": transformed_results}
