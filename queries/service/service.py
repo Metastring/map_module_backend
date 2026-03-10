@@ -5,6 +5,13 @@ from shapely.geometry import Polygon, MultiPolygon
 from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_all_data_from_datasets, get_scientific_name_matches_from_datasets, get_table_column_names
 from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
 
+# Curated display_fields per dataset (only these columns appear under display_fields in the API response)
+DISPLAY_FIELDS_BY_DATASET = {
+	"gbif": ["scientificname", "eventdate", "basisofrecord", "countrycode"],
+	"kew": ["scientificName", "continent", "region", "area"],
+	"cpmp": ["plant_id", "family", "genus", "species", "author", "state"],
+}
+
 
 def map_dataset_names(frontend_datasets: List[str]) -> List[str]:
 	mapped_datasets = []
@@ -140,22 +147,21 @@ def transform_results_with_display_fields(results_by_frontend: dict, mapped_data
 		# Get data if it exists, otherwise use empty list
 		data = results_by_frontend.get(frontend_name, [])
 		
-		# Get column names from database schema
-		table_name = frontend_to_table.get(frontend_name, frontend_name)
-		display_fields = get_table_column_names(table_name)
-		
-		# If we have data, verify we have all columns (in case of computed columns)
-		if isinstance(data, list) and len(data) > 0:
-			# Get all unique keys from actual data
-			all_keys = set()
-			for record in data:
-				if isinstance(record, dict):
-					all_keys.update(record.keys())
-			# Merge with schema columns to ensure we have all columns
-			display_fields = sorted(list(set(display_fields) | all_keys))
-		elif isinstance(data, dict) and len(data) > 0:
-			# If data is a single dict, merge with schema columns
-			display_fields = sorted(list(set(display_fields) | set(data.keys())))
+		# Use curated display_fields for known datasets; otherwise derive from schema/data
+		if frontend_name in DISPLAY_FIELDS_BY_DATASET:
+			display_fields = list(DISPLAY_FIELDS_BY_DATASET[frontend_name])
+		else:
+			table_name = frontend_to_table.get(frontend_name, frontend_name)
+			display_fields = get_table_column_names(table_name)
+			# If we have data, verify we have all columns (in case of computed columns)
+			if isinstance(data, list) and len(data) > 0:
+				all_keys = set()
+				for record in data:
+					if isinstance(record, dict):
+						all_keys.update(record.keys())
+				display_fields = sorted(list(set(display_fields) | all_keys))
+			elif isinstance(data, dict) and len(data) > 0:
+				display_fields = sorted(list(set(display_fields) | set(data.keys())))
 		
 		transformed_results[frontend_name] = {
 			"display_fields": display_fields,
