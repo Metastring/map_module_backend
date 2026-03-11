@@ -146,7 +146,13 @@ def transform_results_with_display_fields(results_by_frontend: dict, mapped_data
 	for frontend_name in frontend_datasets:
 		# Get data if it exists, otherwise use empty list
 		data = results_by_frontend.get(frontend_name, [])
-		
+
+		# If there is no data for this dataset, return null instead of an
+		# object with empty data/display_fields to match API requirements.
+		if (isinstance(data, list) and len(data) == 0) or (isinstance(data, dict) and len(data) == 0):
+			transformed_results[frontend_name] = None
+			continue
+
 		# Use curated display_fields for known datasets; otherwise derive from schema/data
 		if frontend_name in DISPLAY_FIELDS_BY_DATASET:
 			display_fields = list(DISPLAY_FIELDS_BY_DATASET[frontend_name])
