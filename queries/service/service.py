@@ -2,7 +2,7 @@ from typing import List
 import math
 import uuid
 from shapely.geometry import Polygon, MultiPolygon
-from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_all_data_from_datasets, get_scientific_name_matches_from_datasets, get_table_column_names
+from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_all_data_from_datasets, get_scientific_name_matches_from_datasets, get_table_column_names, filter_existing_tables
 from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
 
 # Curated display_fields per dataset (only these columns appear under display_fields in the API response)
@@ -179,6 +179,11 @@ def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_de
 	"""
 	# Use dataset names directly as table names, same as fetch_multi_polygon_query (no kew -> kew_with_geom mapping)
 	datasets_to_query = dataset
+	# If at least one requested dataset exists, ignore the unknown ones.
+	# If none exist (e.g. ["xyz"]), keep original behavior (DB error is acceptable per requirements).
+	existing = filter_existing_tables(datasets_to_query)
+	if existing:
+		datasets_to_query = existing
 
 	# When no polygon(s) provided: return all data for the selected dataset(s)
 	if not polygon_detail:

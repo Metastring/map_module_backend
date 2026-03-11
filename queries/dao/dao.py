@@ -7,6 +7,27 @@ from utils.config import db_schema
 
 SCHEMA = db_schema
 
+# Filter dataset names to only tables that exist in the configured schema.
+# If none exist, caller can decide whether to raise or let existing logic error.
+def filter_existing_tables(dataset: List[str]) -> List[str]:
+	if not dataset:
+		return []
+	try:
+		with engine.connect() as conn:
+			query = text("""
+				SELECT table_name
+				FROM information_schema.tables
+				WHERE table_schema = :schema
+				  AND table_name = ANY(:table_names)
+			""")
+			res = conn.execute(query, {"schema": SCHEMA, "table_names": dataset})
+			existing = {row[0] for row in res}
+			return [t for t in dataset if t in existing]
+	except Exception as e:
+		# If the check itself fails, be conservative and return original dataset list
+		print(f"Warning: Could not validate dataset tables: {e}")
+		return dataset
+
 # Accepts a Polygon object and returns results from datasets
 
 def get_polygon_data_from_datasets(dataset: List[str], polygon: Polygon, limit: int = 1000, offset: int = 0) -> Dict[str, List[Dict]]:
