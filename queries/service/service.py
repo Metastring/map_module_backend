@@ -7,9 +7,9 @@ from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
 
 # Curated display_fields per dataset (only these columns appear under display_fields in the API response)
 DISPLAY_FIELDS_BY_DATASET = {
-	"gbif": ["scientificname", "eventdate", "basisofrecord", "countrycode"],
-	"kew": ["scientific_name", "continent", "region", "area"],
-	"cpmp": ["plant_id", "family", "genus", "species", "author", "state"],
+	"gbif": ["scientificname", "eventdate", "basisofrecord"],
+	"kew": ["scientificname", "continent", "region", "area"],
+	"cpmp": ["family", "genus", "species", "author", "state"],
 }
 
 
