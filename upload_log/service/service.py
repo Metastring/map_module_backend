@@ -155,6 +155,103 @@ def _detect_lat_long_columns(df: "pd.DataFrame") -> Optional[tuple[str, str]]:
         return (lat_col, long_col)
     return None
 
+
+def _df_column_has_non_empty_values(df: "pd.DataFrame", col: str) -> bool:
+    """True if the column exists and at least one row has a non-blank value."""
+    if col not in df.columns:
+        return False
+    s = df[col]
+    if not s.notna().any():
+        return False
+    return bool((s.astype(str).str.strip() != "").any())
+
+
+def _detect_taluk_column(df: "pd.DataFrame") -> Optional[str]:
+    """Detect taluka/tehsil column after normalization (snake_case)."""
+    cols = set(df.columns)
+    for p in (
+        "taluk",
+        "taluka",
+        "taluk_name",
+        "tehsil",
+        "tahsil",
+        "mandal",
+        "subdistrict",
+        "sub_district",
+    ):
+        if p in cols:
+            return p
+    return None
+
+
+def _detect_district_column(df: "pd.DataFrame") -> Optional[str]:
+    cols = set(df.columns)
+    for p in ("district", "dist", "district_name", "dt_name", "d_name"):
+        if p in cols:
+            return p
+    return None
+
+
+def _apply_gadm_then_state_polygon_mapping(
+    df: "pd.DataFrame",
+    table_name: str,
+    schema: str,
+    db: Session,
+    state_column: str,
+) -> str:
+    """
+    Priority: taluk > district > state (world_geojson).
+    Any row with taluk maps on gadm_boundaries.taluk only (district on the row is not used for join).
+    Rows still without geom and with district then map on gadm_boundaries.district.
+    Remaining nulls use state.
+    """
+    taluk_col = _detect_taluk_column(df)
+    dist_col = _detect_district_column(df)
+    has_taluk_data = bool(taluk_col and _df_column_has_non_empty_values(df, taluk_col))
+    has_dist_data = bool(dist_col and _df_column_has_non_empty_values(df, dist_col))
+
+    if not has_taluk_data and not has_dist_data:
+        n = UploadLogDAO.map_geometry_from_world_geojson_using_column(
+            table_name, schema, db, state_column=state_column
+        )
+        return (
+            f"Geometry column populated from world_geojson using '{state_column}' "
+            f"({n} rows updated)."
+        )
+
+    summary_parts: List[str] = []
+    try:
+        if has_taluk_data:
+            n_t = UploadLogDAO.map_geometry_from_gadm_taluk(
+                table_name, schema, db, taluk_col
+            )
+            if n_t:
+                summary_parts.append(f"gadm taluk ({n_t} rows)")
+        if has_dist_data:
+            n_d = UploadLogDAO.map_geometry_from_gadm_district(
+                table_name, schema, db, dist_col
+            )
+            if n_d:
+                summary_parts.append(f"gadm district ({n_d} rows)")
+    except Exception as exc:
+        logger.warning(
+            "GADM boundary mapping failed (%s). Continuing with state-based world_geojson.",
+            exc,
+            exc_info=True,
+        )
+        summary_parts.append("gadm failed (see logs)")
+
+    n_state = UploadLogDAO.map_geometry_from_world_geojson_using_column(
+        table_name, schema, db, state_column=state_column
+    )
+    summary_parts.append(f"world_geojson '{state_column}' ({n_state} rows)")
+    return (
+        "Geometry column: "
+        + ", ".join(summary_parts)
+        + "."
+    )
+
+
 # Initialize GeoServer services for helper functions
 _geo_dao = GeoServerDAO(
     base_url=f"http://{geoserver_host}:{geoserver_port}/geoserver/rest",
@@ -796,7 +893,7 @@ class UploadLogService:
             UploadLogDAO.insert_data_dynamic1(table_name, schema, df, db, dataset_id)
 
             # Step 3: Add geometry column and map geometry
-            # Priority: 1) geometry_wkt, 2) lat/long columns (point data), 3) state column (polygon data)
+            # Priority: 1) geometry_wkt, 2) lat/long, 3) gadm taluk → district → world_geojson state
             geometry_mapping_message = ""
             has_geometry_wkt = "geometry_wkt" in df.columns
             lat_long_cols = _detect_lat_long_columns(df)
@@ -826,13 +923,17 @@ class UploadLogService:
                         logger.info(f"Updated {rows_updated} rows with POINT geometry from lat/long")
                         geometry_mapping_message = f"Geometry column populated from lat/long columns ({lat_col}, {long_col}) ({rows_updated} rows updated)."
                     else:
-                        # Fall back to state logic
+                        # GADM taluk/district then state (same as no-WKT branch)
                         logger.info(f"Adding MULTIPOLYGON geometry column to table {schema}.{table_name}")
                         UploadLogDAO.add_geometry_column(table_name, schema, db, geometry_type="MULTIPOLYGON")
-                        logger.info(f"geometry_wkt column exists but has no data, falling back to state-based mapping")
-                        rows_updated = UploadLogDAO.map_geometry_from_world_geojson(table_name, schema, db)
-                        logger.info(f"Updated {rows_updated} rows with geometry from world_geojson")
-                        geometry_mapping_message = f"Geometry column populated from world_geojson using state column ({rows_updated} rows updated)."
+                        logger.info(
+                            "geometry_wkt empty: gadm taluk → district → world_geojson"
+                        )
+                        detected_state_col = _detect_state_column(df) or "state"
+                        geometry_mapping_message = _apply_gadm_then_state_polygon_mapping(
+                            df, table_name, schema, db, detected_state_col
+                        )
+                        logger.info(geometry_mapping_message)
             elif lat_long_cols:
                 # No geometry_wkt, but lat/long columns found - create POINT geometry
                 lat_col, long_col = lat_long_cols
@@ -845,22 +946,14 @@ class UploadLogService:
                 logger.info(f"Updated {rows_updated} rows with POINT geometry from lat/long")
                 geometry_mapping_message = f"Geometry column populated from lat/long columns ({lat_col}, {long_col}) ({rows_updated} rows updated)."
             else:
-                # No geometry_wkt or lat/long, use state logic for polygon mapping (existing distribution data logic)
+                # No geometry_wkt or lat/long: taluk → district → state
                 logger.info(f"Adding MULTIPOLYGON geometry column to table {schema}.{table_name}")
                 UploadLogDAO.add_geometry_column(table_name, schema, db, geometry_type="MULTIPOLYGON")
                 detected_state_col = _detect_state_column(df) or "state"
-                logger.info(
-                    "Mapping geometry from world_geojson to table %s.%s using column '%s'",
-                    schema, table_name, detected_state_col
+                geometry_mapping_message = _apply_gadm_then_state_polygon_mapping(
+                    df, table_name, schema, db, detected_state_col
                 )
-                # Use a safer mapping function that can work even if the user's header was "State Name"
-                rows_updated = UploadLogDAO.map_geometry_from_world_geojson_using_column(
-                    table_name, schema, db, state_column=detected_state_col
-                )
-                logger.info(f"Updated {rows_updated} rows with geometry data")
-                geometry_mapping_message = (
-                    f"Geometry column populated from world_geojson using '{detected_state_col}' ({rows_updated} rows updated)."
-                )
+                logger.info(geometry_mapping_message)
 
             # Step 5: Upload to GeoServer if geo_service is provided
             geoserver_message = ""

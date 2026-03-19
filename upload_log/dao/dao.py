@@ -342,3 +342,100 @@ class UploadLogDAO:
             )
             db.rollback()
             raise e
+
+    @staticmethod
+    def map_geometry_from_gadm_taluk(
+        table_name: str,
+        schema: str,
+        db: Session,
+        taluk_column: str,
+    ) -> int:
+        """
+        Rows with non-empty taluk: match gadm_boundaries on taluk only (district on the row is ignored).
+        If multiple GADM rows share a taluk name, one geometry is chosen (DISTINCT ON ctid).
+        """
+        try:
+            qs = _quote_identifier(schema)
+            qt = _quote_identifier(table_name)
+            qg = _quote_identifier("gadm_boundaries")
+            q_taluk_t = _quote_identifier(taluk_column)
+            q_taluk_g = _quote_identifier("taluk")
+
+            sql = text(f"""
+                UPDATE {qs}.{qt} AS t
+                SET geom = g.geom
+                FROM (
+                    SELECT DISTINCT ON (LOWER(TRIM(COALESCE({q_taluk_g}::text, ''))))
+                        {q_taluk_g},
+                        ST_Multi(geom)::geometry(MULTIPOLYGON, 4326) AS geom
+                    FROM {qs}.{qg}
+                    WHERE NULLIF(TRIM(COALESCE({q_taluk_g}::text, '')), '') IS NOT NULL
+                    ORDER BY LOWER(TRIM(COALESCE({q_taluk_g}::text, ''))), ctid
+                ) AS g
+                WHERE t.geom IS NULL
+                  AND NULLIF(TRIM(COALESCE(t.{q_taluk_t}::text, '')), '') IS NOT NULL
+                  AND LOWER(TRIM(t.{q_taluk_t}::text)) = LOWER(TRIM(COALESCE(g.{q_taluk_g}::text, '')))
+            """)
+            result = db.execute(sql)
+            db.commit()
+            n = result.rowcount or 0
+            logger.info(
+                "GADM taluk: updated %s rows in %s.%s",
+                n, schema, table_name,
+            )
+            return n
+        except SQLAlchemyError as e:
+            logger.error(
+                "Error mapping geometry from gadm_boundaries (taluk) to %s.%s: %s",
+                schema, table_name, e,
+            )
+            db.rollback()
+            raise e
+
+    @staticmethod
+    def map_geometry_from_gadm_district(
+        table_name: str,
+        schema: str,
+        db: Session,
+        district_column: str,
+    ) -> int:
+        """
+        Rows still without geom: match district to gadm_boundaries.district.
+        """
+        try:
+            qs = _quote_identifier(schema)
+            qt = _quote_identifier(table_name)
+            qg = _quote_identifier("gadm_boundaries")
+            q_dist_t = _quote_identifier(district_column)
+            q_dist_g = _quote_identifier("district")
+
+            sql = text(f"""
+                UPDATE {qs}.{qt} AS t
+                SET geom = g.geom
+                FROM (
+                    SELECT DISTINCT ON (LOWER(TRIM(COALESCE({q_dist_g}::text, ''))))
+                        {q_dist_g},
+                        ST_Multi(geom)::geometry(MULTIPOLYGON, 4326) AS geom
+                    FROM {qs}.{qg}
+                    WHERE NULLIF(TRIM(COALESCE({q_dist_g}::text, '')), '') IS NOT NULL
+                    ORDER BY LOWER(TRIM(COALESCE({q_dist_g}::text, ''))), ctid
+                ) AS g
+                WHERE t.geom IS NULL
+                  AND NULLIF(TRIM(COALESCE(t.{q_dist_t}::text, '')), '') IS NOT NULL
+                  AND LOWER(TRIM(t.{q_dist_t}::text)) = LOWER(TRIM(COALESCE(g.{q_dist_g}::text, '')))
+            """)
+            result = db.execute(sql)
+            db.commit()
+            n = result.rowcount or 0
+            logger.info(
+                "GADM district: updated %s rows in %s.%s",
+                n, schema, table_name,
+            )
+            return n
+        except SQLAlchemyError as e:
+            logger.error(
+                "Error mapping geometry from gadm_boundaries (district) to %s.%s: %s",
+                schema, table_name, e,
+            )
+            db.rollback()
+            raise e
