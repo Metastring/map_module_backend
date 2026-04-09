@@ -1,8 +1,8 @@
 import strawberry
 from fastapi import APIRouter, HTTPException
 from strawberry.fastapi import GraphQLRouter
-from queries.service.service import fetch_polygon_query, fetch_multi_polygon_query, fetch_scientific_name_matches, fetch_multi_polygon_query_with_display_fields
-from queries.models.model import SpatialQueryInput, SpatialQueryType, ScientificNameInput
+from queries.service.service import fetch_polygon_query, fetch_multi_polygon_query, fetch_scientific_name_matches, fetch_multi_polygon_query_with_display_fields, fetch_dataset_columns
+from queries.models.model import SpatialQueryInput, SpatialQueryType, ScientificNameInput, DatasetColumnsInput
 
 class SpatialQueryAPI1:
     version = "/v1"
@@ -49,15 +49,26 @@ class Query:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    @strawberry.field(description="Query spatial data within multiple polygon boundaries with display fields. Accepts an array of polygons and returns data points and features that intersect with any of the provided polygons from specified datasets. Response includes display_fields for each dataset. When polygonDetail is omitted or empty, returns all data for the selected dataset(s).")
+    @strawberry.field(description="Query spatial data within multiple polygon boundaries with display fields. Input also accepts `category` (currently not used for filtering). Pass displayFieldsByDataset (map of dataset name -> column names) to control display_fields only (data payload remains unchanged); use {} or per-dataset null/[] for display_fields null. Omit displayFieldsByDataset to auto-derive display_fields from schema and row keys. When polygonDetail is omitted or empty, returns all data for the selected dataset(s).")
     def getMultiPolygonDataWithDisplayFields(self, input: SpatialQueryInput) -> SpatialQueryType:
         try:
             result = fetch_multi_polygon_query_with_display_fields(
                 dataset=input.dataset,
                 polygon_detail=input.polygon_detail,
                 limit=input.limit,
-                offset=input.offset
+                offset=input.offset,
+                display_fields_by_dataset=input.display_fields_by_dataset,
             )
+            return SpatialQueryType(results=result.get("results", {}))
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+    @strawberry.field(description="Get all column names for the provided dataset tables. Returns a per-dataset list of columns (or null if a dataset table does not exist).")
+    def getDatasetColumns(self, input: DatasetColumnsInput) -> SpatialQueryType:
+        try:
+            result = fetch_dataset_columns(dataset=input.dataset)
             return SpatialQueryType(results=result.get("results", {}))
         except HTTPException:
             raise

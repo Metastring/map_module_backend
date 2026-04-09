@@ -1,12 +1,6 @@
 from typing import List, Optional
 import strawberry
-from typing import Any
-
-JSON = strawberry.scalar(
-    Any,
-    name="JSON",
-    description="Arbitrary JSON-compatible value"
-)
+from strawberry.scalars import JSON
 
 
 @strawberry.input
@@ -25,10 +19,16 @@ class SpatialQueryInput:
     limit: Optional[int] = 1000
     offset: Optional[int] = 0
     category: Optional[str] = None  # New field for frontend input
+    # Keys must match entries in `dataset`. Values: column names for display_fields and row projection; null/[] per dataset yields display_fields null and full rows. {} applies that to every dataset with data.
+    display_fields_by_dataset: Optional[JSON] = None
 
 @strawberry.type
 class SpatialQueryType:
     results: JSON
+
+@strawberry.input
+class DatasetColumnsInput:
+    dataset: List[str]
 
 @strawberry.input
 class ScientificNameInput:
