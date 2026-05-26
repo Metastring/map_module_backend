@@ -7,9 +7,23 @@ from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
 
 # Curated display_fields per dataset (only these columns appear under display_fields in the API response)
 DISPLAY_FIELDS_BY_DATASET = {
-	"gbif": ["scientificname", "eventdate", "basisofrecord"],
+	"gbif": [
+		"basisofrecord",
+		"countrycode",
+		"decimallatitude",
+		"decimallongitude",
+		"eventdate",
+		"latitude",
+		"longitude",
+		"scientificname",
+	],
 	"kew": ["scientificname", "continent", "region", "area"],
 	"cpmp": ["family", "genus", "species", "author", "state"],
+}
+
+# Columns omitted from display_fields when derived from schema/data (e.g. gbif)
+DISPLAY_FIELDS_EXCLUDE_BY_DATASET = {
+	"gbif": {"dataset_id", "geom"},
 }
 
 
@@ -168,6 +182,10 @@ def transform_results_with_display_fields(results_by_frontend: dict, mapped_data
 				display_fields = sorted(list(set(display_fields) | all_keys))
 			elif isinstance(data, dict) and len(data) > 0:
 				display_fields = sorted(list(set(display_fields) | set(data.keys())))
+
+		exclude = DISPLAY_FIELDS_EXCLUDE_BY_DATASET.get(frontend_name)
+		if exclude:
+			display_fields = [f for f in display_fields if f not in exclude]
 		
 		transformed_results[frontend_name] = {
 			"display_fields": display_fields,
