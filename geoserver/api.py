@@ -11,7 +11,7 @@ from geoserver.dao import GeoServerDAO
 from geoserver.model import (CreateLayerRequest, PostGISRequest, PublishUploadLogRequest, PublishUploadLogResponse)
 from geoserver.service import GeoServerService
 from geoserver.admin.api import get_layer_bbox
-from metadata.models.schema import Metadata
+from metadata.models.schema import MapLayerInfo
 from metadata.service.service import MetadataService
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'utils'))
@@ -69,7 +69,7 @@ async def upload_postgis(request: PostGISRequest):
 
 
 
-def _map_metadata_to_layer(metadata: Metadata) -> Dict:
+def _map_metadata_to_layer(metadata: MapLayerInfo) -> Dict:
     """
     Helper function to map metadata object to layer response dictionary.
     """
@@ -94,7 +94,7 @@ def _map_metadata_to_layer(metadata: Metadata) -> Dict:
     }
 
 
-def _map_metadata_to_layer1(metadata: Metadata) -> Dict:
+def _map_metadata_to_layer1(metadata: MapLayerInfo) -> Dict:
     """
     Helper function to map metadata object to layer response dictionary for /layers1 endpoint.
     Uses renamed keys and excludes certain fields.
@@ -148,7 +148,7 @@ async def list_layers(db: Session = Depends(get_db)):
             layer_names = [layer.get("name") for layer in layers_list if layer.get("name")]
 
             # Batch fetch all metadata in one query (solves N+1 problem)
-            metadata_dict: Dict[str, Metadata] = {}
+            metadata_dict: Dict[str, MapLayerInfo] = {}
             if layer_names:
                 try:
                     metadata_list = MetadataService.get_by_geoserver_names(layer_names, db)
@@ -220,7 +220,7 @@ async def list_layers1(db: Session = Depends(get_db)):
             layer_names = [layer.get("name") for layer in layers_list if layer.get("name")]
 
             # Batch fetch all metadata in one query (solves N+1 problem)
-            metadata_dict: Dict[str, Metadata] = {}
+            metadata_dict: Dict[str, MapLayerInfo] = {}
             if layer_names:
                 try:
                     metadata_list = MetadataService.get_by_geoserver_names(layer_names, db)

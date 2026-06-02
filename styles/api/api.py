@@ -8,7 +8,7 @@ from database.database import get_db
 from geoserver.dao import GeoServerDAO
 from geoserver.service import GeoServerService
 from utils.config import (geoserver_host, geoserver_port, geoserver_username, geoserver_password)
-from metadata.models.schema import Metadata
+from metadata.models.schema import MapLayerInfo
 from ..service.style_service import StyleService
 from ..models.model import (StyleMetadataOut, StyleGenerateRequest, StyleGenerateResponse, AuditLogOut)
 
@@ -190,7 +190,7 @@ async def get_styles_by_layer(
         try:
             layer_uuid = uuid.UUID(layer_id_or_name)
             # Query metadata by ID to get geoserver_name
-            metadata = db.query(Metadata).filter(Metadata.id == layer_uuid).first()
+            metadata = db.query(MapLayerInfo).filter(MapLayerInfo.id == layer_uuid).first()
             if not metadata:
                 raise HTTPException(status_code=404, detail="Layer not found")
             # Get layer name from metadata
@@ -198,7 +198,7 @@ async def get_styles_by_layer(
         except ValueError:
             # Not a valid UUID, treat as layer_name (geoserver_name)
             # Query metadata by geoserver_name
-            metadata = db.query(Metadata).filter(Metadata.geoserver_name == layer_id_or_name).first()
+            metadata = db.query(MapLayerInfo).filter(MapLayerInfo.geoserver_name == layer_id_or_name).first()
             if not metadata:
                 raise HTTPException(status_code=404, detail="Layer not found")
             # Use the provided layer_id_or_name as layer_name since it's already a geoserver_name

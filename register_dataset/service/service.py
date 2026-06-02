@@ -176,11 +176,10 @@ class RegisterDatasetService:
             try:
                 geoserver_layer_name = f"{request.workspace}:{layer_name}"
                 metadata_input = MetadataInput(
-                    dataset_id=dataset_id,
                     geoserver_name=geoserver_layer_name,
                     name_of_dataset=request.name_of_dataset,
                     theme=request.theme,
-                    keywords=request.keywords or request.tags,  # Map tags to keywords if available
+                    keywords=request.keywords or request.tags,
                     purpose_of_creating_data=request.purpose_of_creating_data,
                     access_constraints=request.access_constraints,
                     use_constraints=request.use_constraints,
@@ -388,7 +387,6 @@ class RegisterDatasetService:
                 logger.info(f"Step 4: Creating metadata entry")
                 try:
                     metadata_input = MetadataInput(
-                        dataset_id=dataset_id,
                         geoserver_name=geoserver_layer_name or f"{request.workspace}:{actual_feature_type_name}",
                         name_of_dataset=request.name_of_dataset,
                         theme=request.theme,

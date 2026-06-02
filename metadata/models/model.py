@@ -7,9 +7,9 @@ import strawberry
 @strawberry.type
 class MetadataType:
     id: UUID
-    dataset_id: Optional[UUID]
+    dataset_id: Optional[int]  # now INTEGER FK to dataset_master
     geoserver_name: str
-    name_of_dataset: str
+    name_of_dataset: Optional[str]
     theme: Optional[str]
     keywords: Optional[List[str]]
     purpose_of_creating_data: Optional[str]
@@ -22,15 +22,15 @@ class MetadataType:
     city_locality_country: Optional[str]
     country: Optional[str]
     contact_email: Optional[str]
-    created_on: datetime
+    created_on: Optional[datetime]
     updated_on: Optional[datetime]
 
 
 @strawberry.input
 class MetadataInput:
-    dataset_id: Optional[UUID] = None
     geoserver_name: str
     name_of_dataset: str
+    dataset_id: Optional[UUID] = None  # accepted but not stored; kept for API compat
     theme: Optional[str] = None
     keywords: Optional[List[str]] = None
     purpose_of_creating_data: Optional[str] = None
@@ -48,7 +48,6 @@ class MetadataInput:
 @strawberry.input
 class MetadataFilterInput:
     id: Optional[UUID] = None
-    dataset_id: Optional[UUID] = None
     geoserver_name: Optional[str] = None
     name_of_dataset: Optional[str] = None
     theme: Optional[str] = None
@@ -65,4 +64,3 @@ class MetadataFilterInput:
     contact_email: Optional[str] = None
     created_on: Optional[datetime] = None
     updated_on: Optional[datetime] = None
-

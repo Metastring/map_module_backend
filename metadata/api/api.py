@@ -1,12 +1,11 @@
 import strawberry
 from strawberry.fastapi import GraphQLRouter
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from metadata.models.model import MetadataFilterInput, MetadataType, MetadataInput
 from metadata.service.service import MetadataService
 from database.database import get_db
 import logging
-import uuid
 from typing import Optional, List
 
 logger = logging.getLogger(__name__)
