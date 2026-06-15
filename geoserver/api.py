@@ -266,10 +266,9 @@ async def list_layers1(db: Session = Depends(get_db)):
                     metadata = metadata_dict[layer_name]
                     enhanced_layer.update(_map_metadata_to_layer1(metadata))
 
-                    # Add thumbnail (WMS link)
-                    if metadata.geoserver_name:
-                        wms_link = geo_service.get_tile_layer_url(metadata.geoserver_name)
-                        enhanced_layer["thumbnail"] = wms_link
+                # Always add thumbnail using the GeoServer layer name
+                if geoserver_name:
+                    enhanced_layer["thumbnail"] = geo_service.get_tile_layer_url(geoserver_name)
 
                 # Fetch and add bounding box
                 if layer_name:

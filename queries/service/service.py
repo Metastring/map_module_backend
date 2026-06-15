@@ -133,7 +133,7 @@ def fetch_scientific_name_matches(scientific_name: str):
 
 ######## This logic because this way we won't have to define the model individually it wll give response for any number of datasets but it will return entire data ################
 
-def transform_results_with_display_fields(results_by_frontend: dict, mapped_datasets: List[str], frontend_datasets: List[str]) -> dict:
+def transform_results_with_display_fields(results_by_frontend: dict, mapped_datasets: List[str], frontend_datasets: List[str], display_fields_by_dataset: dict = None) -> dict:
 	"""
 	Transform results to include display_fields for each dataset.
 	Fetches column names from database schema, so display_fields are available even if no data is returned.
@@ -167,8 +167,10 @@ def transform_results_with_display_fields(results_by_frontend: dict, mapped_data
 			transformed_results[frontend_name] = None
 			continue
 
-		# Use curated display_fields for known datasets; otherwise derive from schema/data
-		if frontend_name in DISPLAY_FIELDS_BY_DATASET:
+		# Use per-request override if provided, then curated defaults, then schema/data derivation
+		if display_fields_by_dataset and frontend_name in display_fields_by_dataset:
+			display_fields = list(display_fields_by_dataset[frontend_name])
+		elif frontend_name in DISPLAY_FIELDS_BY_DATASET:
 			display_fields = list(DISPLAY_FIELDS_BY_DATASET[frontend_name])
 		else:
 			table_name = frontend_to_table.get(frontend_name, frontend_name)
@@ -195,7 +197,7 @@ def transform_results_with_display_fields(results_by_frontend: dict, mapped_data
 	return transformed_results
 
 
-def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_detail: List[dict], limit: int = 1000, offset: int = 0):
+def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_detail: List[dict], limit: int = 1000, offset: int = 0, display_fields_by_dataset: dict = None):
 	"""
 	Same as fetch_multi_polygon_query but returns data in format with display_fields.
 	When polygon_detail is missing or empty, returns all data for the selected dataset(s).
@@ -213,7 +215,7 @@ def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_de
 	if not polygon_detail:
 		raw_results_by_table = get_all_data_from_datasets(datasets_to_query, limit, offset)
 		results_by_frontend = {table_name: clean_nan_values(rows) for table_name, rows in raw_results_by_table.items()}
-		transformed_results = transform_results_with_display_fields(results_by_frontend, datasets_to_query, dataset)
+		transformed_results = transform_results_with_display_fields(results_by_frontend, datasets_to_query, dataset, display_fields_by_dataset)
 		return {"results": transformed_results}
 
 	# Handle multiple polygons
@@ -229,10 +231,10 @@ def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_de
 			except Exception as e:
 				print(f"Warning: Invalid polygon coordinates: {e}")
 				continue
-	
+
 	if not polygons:
 		return {"results": {}}
-	
+
 	# Create a MultiPolygon from all valid polygons
 	if len(polygons) == 1:
 		geometry = polygons[0]
@@ -244,6 +246,6 @@ def fetch_multi_polygon_query_with_display_fields(dataset: List[str], polygon_de
 	# Use table names directly (no reverse mapping), same as fetch_multi_polygon_query
 	results_by_frontend = {table_name: clean_nan_values(rows) for table_name, rows in raw_results_by_table.items()}
 
-	transformed_results = transform_results_with_display_fields(results_by_frontend, datasets_to_query, dataset)
+	transformed_results = transform_results_with_display_fields(results_by_frontend, datasets_to_query, dataset, display_fields_by_dataset)
 
 	return {"results": transformed_results}

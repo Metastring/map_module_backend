@@ -24,7 +24,8 @@ class SpatialQueryInput:
     polygon_detail: Optional[List[PolygonDetailInput]] = None  # When null/omitted, returns all data for selected dataset(s)
     limit: Optional[int] = 1000
     offset: Optional[int] = 0
-    category: Optional[str] = None  # New field for frontend input
+    category: Optional[str] = None
+    display_fields_by_dataset: Optional[JSON] = strawberry.field(default=None, description="Per-dataset display field overrides, e.g. {\"kew\": [\"scientificname\", \"region\"]}")
 
 @strawberry.type
 class SpatialQueryType:

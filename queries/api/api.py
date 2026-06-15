@@ -56,7 +56,8 @@ class Query:
                 dataset=input.dataset,
                 polygon_detail=input.polygon_detail,
                 limit=input.limit,
-                offset=input.offset
+                offset=input.offset,
+                display_fields_by_dataset=input.display_fields_by_dataset
             )
             return SpatialQueryType(results=result.get("results", {}))
         except HTTPException:
