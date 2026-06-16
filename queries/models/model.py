@@ -5,7 +5,9 @@ from typing import Any
 JSON = strawberry.scalar(
     Any,
     name="JSON",
-    description="Arbitrary JSON-compatible value"
+    description="Arbitrary JSON-compatible value",
+    serialize=lambda v: v,
+    parse_value=lambda v: v,
 )
 
 
@@ -25,7 +27,7 @@ class SpatialQueryInput:
     limit: Optional[int] = 1000
     offset: Optional[int] = 0
     category: Optional[str] = None
-    display_fields_by_dataset: Optional[JSON] = strawberry.field(default=None, description="Per-dataset display field overrides, e.g. {\"kew\": [\"scientificname\", \"region\"]}")
+    display_fields_by_dataset: Optional[JSON] = None
 
 @strawberry.type
 class SpatialQueryType:
