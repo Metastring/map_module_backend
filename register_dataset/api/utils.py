@@ -1,3 +1,4 @@
+# register_dataset/api/utils.py
 def normalize_style_colors(style_configs_data):
     """Normalize escaped hex colors in a style configs list.
 

@@ -1,3 +1,4 @@
+# styles/service/classification.py
 """
 Classification service for computing class breaks.
 Implements Equal Interval, Quantile, and Jenks Natural Breaks algorithms.

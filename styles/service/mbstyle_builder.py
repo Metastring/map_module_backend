@@ -1,3 +1,4 @@
+# styles/service/mbstyle_builder.py
 """
 MBStyle Builder Service.
 Generates Mapbox Style JSON for GeoServer from classification results.

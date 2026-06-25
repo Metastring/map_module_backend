@@ -1,3 +1,4 @@
+# styles/models/schema.py
 import enum
 import logging
 from sqlalchemy import (

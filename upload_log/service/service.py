@@ -35,6 +35,27 @@ from utils.config import (
 
 logger = logging.getLogger(__name__)
 
+STATE_SYNONYMS = {
+    "chhattisgarh": "chattisgarh",
+    "uttarakhand": "uttaranchal",
+    "odisha": "orissa",
+}
+
+def _normalize_state_for_world_geojson(state_name: str) -> str:
+    """
+    Normalize uploaded state names to match world_geojson naming.
+    """
+
+    if not state_name:
+        return state_name
+
+    normalized = state_name.strip().lower()
+
+    return STATE_SYNONYMS.get(
+        normalized,
+        normalized
+    )
+
 # ---------------- Column name normalization ----------------
 
 def _normalize_column_name(raw_name: object) -> str:

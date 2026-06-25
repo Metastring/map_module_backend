@@ -1,3 +1,4 @@
+# styles/dao/dao.py
 """
 DAO (Data Access Object) layer for style-related database operations.
 Handles queries to PostGIS for column info, classification data, and style metadata.

@@ -31,4 +31,12 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Local env
 .env
+
+# LSP / editor
+.lsp/
+.clj-kondo/
+
+# Local patches
+*.patch

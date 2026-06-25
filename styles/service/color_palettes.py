@@ -1,3 +1,4 @@
+# styles/service/color_palettes.py
 """
 Color palette service using ColorBrewer palettes.
 Provides color schemes for map styling.

@@ -1,3 +1,4 @@
+# styles/service/style_service.py
 """
 Main Style Service.
 Orchestrates the complete style generation workflow:

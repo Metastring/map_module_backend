@@ -1,3 +1,4 @@
+# styles/models/model.py
 from datetime import datetime
 from enum import Enum
 import re
@@ -167,6 +168,11 @@ class StyleGenerateRequest(BaseModel):
     data_source: DataSource = Field(
         DataSource.POSTGIS, 
         description="Data source type: 'postgis' for database tables, 'geoserver' for shapefiles/layers not in DB"
+    )
+    
+    filters: Optional[Dict[str, List[Any]]] = Field(
+        default=None,
+        description="Optional dataset filters"
     )
 
     # Optional overrides

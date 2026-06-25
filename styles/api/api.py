@@ -1,3 +1,4 @@
+# styles/api/api.py
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
