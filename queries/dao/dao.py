@@ -11,7 +11,7 @@ SCHEMA = db_schema
 SEMANTIC_FILTERS = {
     "scientific_name": {
         "cpmp": "scientific_name",
-        "cpmp_v3": "scientific_name",
+        "cpmp_v2": "scientific_name",
         "gbif": "scientificname",
     }
 }
