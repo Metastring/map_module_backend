@@ -2,7 +2,7 @@ pipeline {
     agent any
 
     environment {
-        WORK_DIR = '/home/metastring/src/map_module_backend'
+        WORK_DIR = '/home/metastring/src/github/cml/map-module-backend'
     }
 
     stages {
