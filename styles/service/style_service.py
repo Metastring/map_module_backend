@@ -203,6 +203,7 @@ class StyleService:
                 fill_opacity=style_metadata.fill_opacity,
                 stroke_color=style_metadata.stroke_color,
                 stroke_width=style_metadata.stroke_width,
+                source_layer=request.layer_table_name,
             )
             
             mbstyle_dict = self.mbstyle_builder.to_dict(mbstyle)

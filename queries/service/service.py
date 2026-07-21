@@ -1,9 +1,48 @@
-from typing import List
+from typing import List, Optional
 import math
 import uuid
 from shapely.geometry import Polygon, MultiPolygon
-from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_all_data_from_datasets, get_scientific_name_matches_from_datasets, get_table_column_names, filter_existing_tables
+from queries.dao.dao import get_polygon_data_from_datasets, get_multi_polygon_data_from_datasets, get_all_data_from_datasets, get_scientific_name_matches_from_datasets, get_table_column_names, filter_existing_tables, get_dataset_field_mappings
 from utils.config import DATASET_MAPPING, REVERSE_DATASET_MAPPING
+
+# Candidate physical tables that back a scientific-name search, in tie-break order.
+SCIENTIFIC_NAME_SEARCH_TABLES = ("gbif", "kew_with_geom", "cpmp")
+
+# Raw columns that carry geometry/position data for map rendering. These have no
+# ontology_mapping entry of their own, so they're preserved on every dataset-scoped
+# result. Raw WKB "geom" and the geom_geojson polygon blob are deliberately
+# excluded -- the v2 REST search response is record data, not map geometry.
+GEOMETRY_KEEP_KEYS = {"longitude", "latitude", "decimallatitude", "decimallongitude"}
+
+# Ontology names never returned in result rows at all (not useful as record data).
+RESULT_EXCLUDE_ONTOLOGY_NAMES = {"geom"}
+
+# Ontology names excluded from displayFields only -- still present in each result row.
+DISPLAY_FIELDS_EXCLUDE_ONTOLOGY_NAMES = {"id", "geom"}
+
+
+def _normalize(s: str) -> str:
+	"""Loosely normalize a field/column name for comparison (case, spaces, underscores)."""
+	return s.strip().lower().replace(" ", "").replace("_", "")
+
+
+def resolve_table_for_field_names(field_names: List[str], candidates=SCIENTIFIC_NAME_SEARCH_TABLES) -> Optional[str]:
+	"""Pick whichever candidate table's columns best overlap the given field_names.
+
+	field_names typically come from dataset_mapping.field_name, which may not match
+	real column names exactly (extra spaces, casing) -> compared via _normalize.
+	Returns None if no candidate has any overlap.
+	"""
+	normalized_fields = {_normalize(f) for f in field_names}
+	best_table = None
+	best_overlap = 0
+	for table in candidates:
+		columns = {_normalize(c) for c in get_table_column_names(table)}
+		overlap = len(normalized_fields & columns)
+		if overlap > best_overlap:
+			best_overlap = overlap
+			best_table = table
+	return best_table
 
 # Curated display_fields per dataset (only these columns appear under display_fields in the API response)
 DISPLAY_FIELDS_BY_DATASET = {
@@ -129,6 +168,98 @@ def fetch_scientific_name_matches(scientific_name: str):
 		frontend_name = REVERSE_DATASET_MAPPING.get(table_name, table_name)
 		results_by_frontend[frontend_name] = clean_nan_values(rows)
 	return {"results": results_by_frontend}
+
+
+def _legacy_matches_flat(scientific_name: str) -> dict:
+	"""Fallback shape for dataset-scoped search when dataset_title isn't registered
+	or resolves to no known table: flattens the legacy multi-table (gbif+kew+cpmp)
+	search into the same {displayFields, results} contract used by
+	fetch_scientific_name_matches_by_dataset, with an empty label map since there's
+	no dataset_mapping to draw labels from.
+	"""
+	legacy = fetch_scientific_name_matches(scientific_name)
+	rows = []
+	for table_rows in legacy.get("results", {}).values():
+		rows.extend(table_rows)
+	return {"displayFields": {}, "results": rows}
+
+
+def fetch_scientific_name_matches_by_dataset(scientific_name: str, dataset_title: str, fields: List[str] = None):
+	"""Scientific-name search scoped to a single registered dataset.
+
+	Resolves dataset_title -> its dataset_mapping rows -> the physical table those
+	raw field_names best match, then narrows those rows to the ones whose field_name
+	is an actual column on that table (dataset_mapping can register more fields --
+	e.g. trade_name -- than the resolved physical table has, in which case they're
+	dropped rather than advertised with no data behind them). Queries only that
+	table and renames matched columns to their ontology_mapping name. Response is
+	{"displayFields": {ontology_name: label, ...}, "results": [...]}: every
+	table-backed ontology-mapped field is always included in each result row
+	(minus RESULT_EXCLUDE_ONTOLOGY_NAMES, e.g. raw "geom"), regardless of the
+	incoming `fields` -- it's accepted for contract compatibility but no longer
+	acts as a whitelist/display hint; callers decide what to display from the
+	full result object. displayFields lists every returned field except
+	DISPLAY_FIELDS_EXCLUDE_ONTOLOGY_NAMES ("id", "geom"); labels come from
+	dataset_mapping.ontology_mapping_to_display (falling back to the ontology
+	name itself if a mapping row has no label set).
+
+	Falls back to the legacy fetch_scientific_name_matches (gbif+kew+cpmp, unrenamed,
+	empty displayFields) when dataset_title isn't registered, resolves to no known
+	table, or resolves to a table with no field_name overlap at all.
+	"""
+	mappings = get_dataset_field_mappings(dataset_title)
+	if not mappings:
+		return _legacy_matches_flat(scientific_name)
+
+	field_names = [m["field_name"] for m in mappings]
+	table = resolve_table_for_field_names(field_names)
+	if table is None:
+		return _legacy_matches_flat(scientific_name)
+
+	table_columns = {_normalize(c) for c in get_table_column_names(table)}
+	mappings = [m for m in mappings if _normalize(m["field_name"]) in table_columns]
+	if not mappings:
+		return _legacy_matches_flat(scientific_name)
+
+	raw = get_scientific_name_matches_from_datasets(scientific_name, dataset=[table])
+	rows = clean_nan_values(raw.get(table, []))
+
+	rename_map = {_normalize(m["field_name"]): m["ontology_mapping"] for m in mappings}
+	label_map = {}
+	available_ontology_names = []
+	seen = set()
+	for m in mappings:
+		name = m["ontology_mapping"]
+		if name not in label_map and m.get("ontology_mapping_to_display"):
+			label_map[name] = m["ontology_mapping_to_display"]
+		if name not in seen:
+			seen.add(name)
+			available_ontology_names.append(name)
+
+	result_exclude_normalized = {_normalize(n) for n in RESULT_EXCLUDE_ONTOLOGY_NAMES}
+	ontology_names = [n for n in available_ontology_names if _normalize(n) not in result_exclude_normalized]
+
+	transformed_rows = []
+	for row in rows:
+		new_row = {}
+		for key, value in row.items():
+			normalized_key = _normalize(key)
+			if normalized_key in rename_map:
+				out_key = rename_map[normalized_key]
+				if _normalize(out_key) not in result_exclude_normalized:
+					new_row[out_key] = value
+			elif key in GEOMETRY_KEEP_KEYS:
+				new_row[key] = value
+		transformed_rows.append(new_row)
+
+	display_exclude_normalized = {_normalize(n) for n in DISPLAY_FIELDS_EXCLUDE_ONTOLOGY_NAMES}
+	display_fields = {
+		name: label_map.get(name, name)
+		for name in ontology_names
+		if _normalize(name) not in display_exclude_normalized
+	}
+
+	return {"displayFields": display_fields, "results": transformed_rows}
 
 
 ######## This logic because this way we won't have to define the model individually it wll give response for any number of datasets but it will return entire data ################

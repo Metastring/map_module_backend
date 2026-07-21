@@ -51,7 +51,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif", "kew"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -67,7 +67,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 
 **Parameters:**
 - `dataset` (required): Array of dataset names to query (e.g., `["gbif", "kew"]`)
-- `polygon_detail` (required): Array containing exactly one polygon geometry object
+- `polygonDetail` (required): Array containing exactly one polygon geometry object
 - `limit` (optional): Maximum number of results per dataset (default: 1000)
 - `offset` (optional): Number of results to skip for pagination (default: 0)
 - `category` (optional): Category filter (currently not used in queries)
@@ -117,7 +117,7 @@ query GetMultiPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif", "kew"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -138,7 +138,7 @@ query GetMultiPolygonData($input: SpatialQueryInput!) {
 
 **Parameters:**
 - `dataset` (required): Array of dataset names to query
-- `polygon_detail` (required): Array containing one or more polygon geometry objects (at least one required)
+- `polygonDetail` (required): Array containing one or more polygon geometry objects (at least one required)
 - `limit` (optional): Maximum number of results per dataset (default: 1000)
 - `offset` (optional): Number of results to skip for pagination (default: 0)
 - `category` (optional): Category filter
@@ -149,7 +149,7 @@ query GetMultiPolygonData($input: SpatialQueryInput!) {
 
 ### 3. getScientificNameMatches
 
-Search for spatial data by scientific name. Performs case-insensitive partial match search across all datasets.
+Search for spatial data by scientific name. Performs case-insensitive partial match search across all datasets (`gbif`, `kew`, `cpmp`). For `cpmp`, which stores `genus`/`species`/`author` as separate columns instead of a single scientific name field, the search term is matched against the concatenated `genus + species` and `genus + species + author`.
 
 **Query Structure:**
 ```graphql
@@ -230,7 +230,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif", "kew"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -253,7 +253,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
   "variables": {
     "input": {
       "dataset": ["gbif", "kew"],
-      "polygon_detail": [
+      "polygonDetail": [
         {
           "geometry": {
             "type": "Polygon",
@@ -284,7 +284,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -313,7 +313,7 @@ query GetMultiPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif", "kew"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -388,7 +388,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -407,7 +407,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -437,7 +437,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["gbif"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -466,7 +466,7 @@ query GetPolygonData($input: SpatialQueryInput!) {
 {
   "input": {
     "dataset": ["kew"],
-    "polygon_detail": [
+    "polygonDetail": [
       {
         "geometry": {
           "type": "Polygon",
@@ -502,7 +502,7 @@ curl -X POST http://127.0.0.1:8001/v1/spatial_search \
     "variables": {
       "input": {
         "dataset": ["gbif"],
-        "polygon_detail": [
+        "polygonDetail": [
           {
             "geometry": {
               "type": "Polygon",
@@ -525,7 +525,7 @@ curl -X POST http://127.0.0.1:8001/v1/spatial_search \
     "variables": {
       "input": {
         "dataset": ["gbif", "kew"],
-        "polygon_detail": [
+        "polygonDetail": [
           {
             "geometry": {
               "type": "Polygon",
@@ -691,8 +691,8 @@ Polygon-based data returns:
 
 | Query | Purpose | Key Parameter |
 |-------|---------|---------------|
-| `getPolygonData` | Single area search | `polygon_detail` (1 polygon) |
-| `getMultiPolygonData` | Multiple areas search | `polygon_detail` (multiple polygons) |
+| `getPolygonData` | Single area search | `polygonDetail` (1 polygon) |
+| `getMultiPolygonData` | Multiple areas search | `polygonDetail` (multiple polygons) |
 | `getScientificNameMatches` | Species name search | `scientificName` |
 
 ## Support

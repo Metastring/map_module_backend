@@ -98,11 +98,11 @@ async def get_legend(
         layer_name = f"{style.workspace}:{style.layer_table_name}"
         
         # Build TMS source URL (relative path for frontend)
-        # Format: /geoserver/gwc/service/tms/1.0.0/{workspace}:{layer}@EPSG%3A900913@pbf/{z}/{x}/{y}.pbf
-        
-        
+        # Format: /geoserver/gwc/service/tms/1.0.0/{workspace}:{layer}@EPSG%3A3857@pbf/{z}/{x}/{y}.pbf
+
+
         encoded_layer = quote(layer_name, safe='')
-        tms_url = f"/geoserver/gwc/service/tms/1.0.0/{encoded_layer}@EPSG%3A900913@pbf/{{z}}/{{x}}/{{y}}.pbf"
+        tms_url = f"/geoserver/gwc/service/tms/1.0.0/{encoded_layer}@EPSG%3A3857@pbf/{{z}}/{{x}}/{{y}}.pbf"
         
         # Clone the MBStyle JSON
         mbstyle = style.mbstyle_json.copy()
@@ -302,14 +302,14 @@ async def get_mbstyle_with_sources(
             layer_name = f"{style.workspace}:{style.layer_table_name}"
         
         # Build TMS source URL
-        # Format: /geoserver/gwc/service/tms/1.0.0/{workspace}:{layer}@EPSG%3A900913@pbf/{z}/{x}/{y}.pbf
+        # Format: /geoserver/gwc/service/tms/1.0.0/{workspace}:{layer}@EPSG%3A3857@pbf/{z}/{x}/{y}.pbf
         from utils.config import geoserver_host, geoserver_port
         base_url = f"http://{geoserver_host}:{geoserver_port}"
-        
+
         # URL encode the layer name
         from urllib.parse import quote
         encoded_layer = quote(layer_name, safe='')
-        tms_url = f"{base_url}/geoserver/gwc/service/tms/1.0.0/{encoded_layer}@EPSG%3A900913@pbf/{{z}}/{{x}}/{{y}}.pbf"
+        tms_url = f"{base_url}/geoserver/gwc/service/tms/1.0.0/{encoded_layer}@EPSG%3A3857@pbf/{{z}}/{{x}}/{{y}}.pbf"
         
         # Clone the MBStyle JSON
         mbstyle = style.mbstyle_json.copy()

@@ -5,7 +5,7 @@ from upload_log.api.api import router as upload_log_router
 from data_ingestion.api.api import data_ingestion_api
 
 # Import the new spatial queries API
-from queries.api.api import SpatialQueryAPI1  # Import the original API for comparison
+from queries.api.api import SpatialQueryAPI1, SpatialQueryAPI2  # Import the original API for comparison
 
 # Import metadata GraphQL API
 from metadata.api.api import metadata_app
@@ -43,6 +43,7 @@ app.add_middleware(
 app.include_router(geoserver_router, tags=["geoserver"])  # Add the GeoServer API router
 app.include_router(geoserver_admin_router, prefix="/admin", tags=["geoserver-admin"])  # Add the GeoServer Admin API router
 app.include_router(SpatialQueryAPI1.router, prefix=SpatialQueryAPI1.version, tags=["spatial-search"])  # GraphQL APIs for spatial data queries including polygon-based and scientific name searches
+app.include_router(SpatialQueryAPI2.router, prefix=SpatialQueryAPI2.version, tags=["spatial-search"])  # REST wrapper for scientific name search (category/dataset/fields/search_text contract)
 app.include_router(upload_log_router, prefix="/upload_log", tags=["upload-log"])
 app.include_router(metadata_app, prefix="/metadata", tags=["metadata-graphql"])  # Add metadata GraphQL endpoint
 app.include_router(styles_router, prefix="/styles", tags=["styles"])
@@ -60,7 +61,8 @@ async def root():
     return {
         "message": "CML APIs with GraphQL Spatial Queries",
         "endpoints": {
-            "spatial_graphql": "/v1/graphql",
+            "spatial_graphql": "/v1/spatial_search",
+            "spatial_search_rest": "/v2/spatial_search",
             "upload_log": {
                 "upload": "/upload_log/upload",
                 "list": "/upload_log/",

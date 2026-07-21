@@ -99,6 +99,7 @@ class MBStyleBuilder:
         fill_layer = MBStyleLayer(
             id=f"{style_name}-fill",
             type="fill",
+            source=source_layer,
             source_layer=source_layer,
             paint={
                 "fill-color": fill_color,
@@ -106,11 +107,12 @@ class MBStyleBuilder:
             }
         )
         layers.append(fill_layer)
-        
+
         # Outline layer
         outline_layer = MBStyleLayer(
             id=f"{style_name}-outline",
             type="line",
+            source=source_layer,
             source_layer=source_layer,
             paint={
                 "line-color": stroke_color,
@@ -135,6 +137,7 @@ class MBStyleBuilder:
         line_layer = MBStyleLayer(
             id=f"{style_name}-line",
             type="line",
+            source=source_layer,
             source_layer=source_layer,
             paint={
                 "line-color": line_color,
@@ -160,6 +163,7 @@ class MBStyleBuilder:
         circle_layer = MBStyleLayer(
             id=f"{style_name}-circle",
             type="circle",
+            source=source_layer,
             source_layer=source_layer,
             paint={
                 "circle-color": fill_color,

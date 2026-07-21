@@ -126,20 +126,29 @@ def get_all_data_from_datasets(dataset: List[str], limit: int = 1000, offset: in
 
 # Accepts a scientific name and returns matching names with longitude and latitude from both datasets
 
-def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: list = ["gbif", "kew_with_geom"]) -> Dict[str, List[Dict]]:
+def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: list = ["gbif", "kew_with_geom", "cpmp"]) -> Dict[str, List[Dict]]:
 	results_by_dataset: Dict[str, List[Dict]] = {}
 	with engine.connect() as conn:
 		for table in dataset:
 			if table == "gbif":
-				query = text(f''' 
+				query = text(f'''
 					SELECT t.*,
 					       ST_X(t.geom) AS longitude,
 					       ST_Y(t.geom) AS latitude
 					FROM {SCHEMA}.{table} t
-					WHERE LOWER(t."scientificName") LIKE :name
+					WHERE LOWER(t.scientificname) LIKE :name
+				''')
+			elif table == "cpmp":
+				# cpmp has no scientificname column; match against genus+species and genus+species+author
+				query = text(f'''
+					SELECT t.*,
+					       ST_AsGeoJSON(t.geom) AS geom_geojson
+					FROM {SCHEMA}.{table} t
+					WHERE LOWER(COALESCE(t.genus, '') || ' ' || COALESCE(t.species, '')) LIKE :name
+					   OR LOWER(COALESCE(t.genus, '') || ' ' || COALESCE(t.species, '') || ' ' || COALESCE(t.author, '')) LIKE :name
 				''')
 			else:
-				query = text(f''' 
+				query = text(f'''
 					SELECT t.*,
 					       ST_AsGeoJSON(t.geom) AS geom_geojson
 					FROM {SCHEMA}.{table} t
@@ -148,6 +157,22 @@ def get_scientific_name_matches_from_datasets(scientific_name: str, dataset: lis
 			res = conn.execute(query, {"name": f"%{scientific_name.lower()}%"})
 			results_by_dataset[table] = [dict(row._mapping) for row in res]
 	return results_by_dataset
+
+# Returns the dataset_mapping rows (raw field_name -> canonical ontology_mapping,
+# plus its human-readable display label) registered for the dataset whose
+# dataset_master.title matches dataset_title. Comparison is case- and
+# surrounding-whitespace-insensitive, since callers (e.g. REST clients) may pass
+# titles with incidental leading/trailing spaces.
+def get_dataset_field_mappings(dataset_title: str) -> List[Dict]:
+	query = text(f"""
+		SELECT dm.field_name, dm.ontology_mapping, dm.ontology_mapping_to_display
+		FROM {SCHEMA}.dataset_mapping dm
+		JOIN {SCHEMA}.dataset_master dmas ON dmas.dataset_id = dm.dataset_id
+		WHERE LOWER(TRIM(dmas.title)) = LOWER(TRIM(:title))
+	""")
+	with engine.connect() as conn:
+		res = conn.execute(query, {"title": dataset_title})
+		return [dict(row._mapping) for row in res]
 
 # Get column names from database schema for a given table
 def get_table_column_names(table_name: str) -> List[str]:
