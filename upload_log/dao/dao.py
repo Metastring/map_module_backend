@@ -22,6 +22,37 @@ def _quote_identifier(identifier: str) -> str:
     escaped = identifier.replace('"', '""')
     return f'"{escaped}"'
 
+# ------------------------------------------------------------------
+# State aliases to match legacy names in world_geojson.level_4_na
+# ------------------------------------------------------------------
+STATE_SYNONYMS = {
+    "chhattisgarh": "chattisgarh",
+    "uttarakhand": "uttaranchal",
+    "odisha": "orissa",
+}
+
+def _build_state_normalization_sql(column_expression: str) -> str:
+    """
+    Build SQL CASE statement for legacy state aliases.
+    """
+    case_parts = []
+
+    for uploaded_name, world_geojson_name in STATE_SYNONYMS.items():
+        case_parts.append(
+            f"""
+            WHEN LOWER(TRIM({column_expression}::text)) = '{uploaded_name}'
+            THEN '{world_geojson_name}'
+            """
+        )
+
+    case_sql = "\n".join(case_parts)
+
+    return f"""
+        CASE
+            {case_sql}
+            ELSE LOWER(TRIM({column_expression}::text))
+        END
+    """
 
 class UploadLogDAO:
     @staticmethod
@@ -209,16 +240,47 @@ class UploadLogDAO:
             # SQL to update geometry from world_geojson table
             # Join on state = level_4_na (case-insensitive and whitespace-insensitive)
             # Cast geometry to MULTIPOLYGON to match the column type
+            normalized_state_sql = _build_state_normalization_sql(
+                f"t.{quoted_state_col}"
+            )
+
             sql = text(f"""
                 UPDATE {quoted_schema}.{quoted_table} AS t
                 SET geom = ST_Multi(w.geom)::geometry(MULTIPOLYGON, 4326)
                 FROM {quoted_schema}.{quoted_world_geojson} AS w
-                WHERE LOWER(TRIM(t.{quoted_state_col})) = LOWER(TRIM(w.level_4_na))
+                WHERE
+                    {normalized_state_sql}
+                    =
+                    LOWER(TRIM(w.level_4_na))
                 AND t.geom IS NULL
             """)
+
             result = db.execute(sql)
             db.commit()
             rows_updated = result.rowcount
+
+            unmatched_sql = text(f"""
+                SELECT DISTINCT t.{quoted_state_col}
+                FROM {quoted_schema}.{quoted_table} t
+                WHERE t.geom IS NULL
+                AND t.{quoted_state_col} IS NOT NULL
+                ORDER BY t.{quoted_state_col}
+            """)
+
+            unmatched = [
+                str(row[0]).strip()
+                for row in db.execute(unmatched_sql).fetchall()
+                if row[0]
+            ]
+
+            if unmatched:
+                logger.warning(
+                    "States not matched in world_geojson for table %s.%s: %s",
+                    schema,
+                    table_name,
+                    unmatched,
+                )
+
             logger.info(f"Updated {rows_updated} rows with geometry from world_geojson in table {schema}.{table_name}")
             return rows_updated
         except SQLAlchemyError as e:
@@ -236,6 +298,11 @@ class UploadLogDAO:
         """
         Same as map_geometry_from_world_geojson, but allows choosing which column
         in the uploaded table contains the state name.
+
+        Supports legacy state aliases:
+            Chhattisgarh -> Chattisgarh
+            Uttarakhand  -> Uttaranchal
+            Odisha       -> Orissa
         """
         try:
             quoted_schema = _quote_identifier(schema)
@@ -243,25 +310,71 @@ class UploadLogDAO:
             quoted_world_geojson = _quote_identifier("world_geojson")
             quoted_state_col = _quote_identifier(state_column)
 
+            # ----------------------------------------------------------
+            # Build CASE statement from STATE_SYNONYMS
+            # ----------------------------------------------------------
+            normalized_state_sql = _build_state_normalization_sql(
+                f"t.{quoted_state_col}"
+            )
+
             sql = text(f"""
                 UPDATE {quoted_schema}.{quoted_table} AS t
                 SET geom = ST_Multi(w.geom)::geometry(MULTIPOLYGON, 4326)
                 FROM {quoted_schema}.{quoted_world_geojson} AS w
-                WHERE LOWER(TRIM(t.{quoted_state_col})) = LOWER(TRIM(w.level_4_na))
+                WHERE
+                    {normalized_state_sql}
+                    =
+                    LOWER(TRIM(w.level_4_na))
                 AND t.geom IS NULL
             """)
+
             result = db.execute(sql)
             db.commit()
-            rows_updated = result.rowcount
+
+            rows_updated = result.rowcount or 0
+
             logger.info(
                 "Updated %s rows with geometry from world_geojson in table %s.%s using column '%s'",
-                rows_updated, schema, table_name, state_column
+                rows_updated,
+                schema,
+                table_name,
+                state_column,
             )
+
+            # ----------------------------------------------------------
+            # Log unmatched states for troubleshooting
+            # ----------------------------------------------------------
+            unmatched_sql = text(f"""
+                SELECT DISTINCT t.{quoted_state_col}
+                FROM {quoted_schema}.{quoted_table} t
+                WHERE t.geom IS NULL
+                AND t.{quoted_state_col} IS NOT NULL
+                ORDER BY t.{quoted_state_col}
+            """)
+
+            unmatched = [
+                str(row[0]).strip()
+                for row in db.execute(unmatched_sql).fetchall()
+                if row[0]
+            ]
+
+            if unmatched:
+                logger.warning(
+                    "States not matched in world_geojson for table %s.%s: %s",
+                    schema,
+                    table_name,
+                    unmatched,
+                )
+
             return rows_updated
+
         except SQLAlchemyError as e:
             logger.error(
                 "Error mapping geometry from world_geojson to table %s.%s using column '%s': %s",
-                schema, table_name, state_column, e
+                schema,
+                table_name,
+                state_column,
+                e,
             )
             db.rollback()
             raise e

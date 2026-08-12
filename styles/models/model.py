@@ -168,6 +168,11 @@ class StyleGenerateRequest(BaseModel):
         DataSource.POSTGIS, 
         description="Data source type: 'postgis' for database tables, 'geoserver' for shapefiles/layers not in DB"
     )
+    
+    filters: Optional[Dict[str, List[Any]]] = Field(
+        default=None,
+        description="Optional dataset filters"
+    )
 
     # Optional overrides
     layer_type: Optional[LayerType] = None
