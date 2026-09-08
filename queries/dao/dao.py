@@ -4,6 +4,7 @@ from sqlalchemy.sql import text
 from database.database import engine
 from typing import List, Dict, Union, Optional
 from utils.config import db_schema
+import json
 
 SCHEMA = db_schema
 
@@ -204,86 +205,432 @@ def get_polygon_data_from_datasets(dataset: List[str], polygon: Polygon, limit: 
 
 # Accepts a Polygon or MultiPolygon object and returns results from datasets
 
-def get_multi_polygon_data_from_datasets(dataset: List[str], polygon: Union[Polygon, MultiPolygon], limit: int = 1000, offset: int = 0, filters=None) -> Dict[str, List[Dict]]:
+def get_multi_polygon_data_from_datasets(
+    dataset: List[str],
+    polygon: Union[Polygon, MultiPolygon],
+    limit: int = 1000,
+    offset: int = 0,
+    filters=None
+) -> Dict[str, Dict]:
 
-   wkt = polygon.wkt
-   results_by_dataset: Dict[str, List[Dict]] = {}
-   with engine.connect() as conn:
-       for table in dataset:
-           validated_filters = validate_filters_for_table(
-               table,
-               filters
-               )
-           filter_sql, filter_params = build_filter_clause(
-               validated_filters
-               )
-           if table == "gbif":
-               query = text(f"""
-                   SELECT t.*,
-                          ST_X(t.geom) AS longitude,
-                          ST_Y(t.geom) AS latitude
-                   FROM {SCHEMA}.{table} t
-                   WHERE ST_Intersects(
-                       t.geom,
-                       ST_SetSRID(ST_GeomFromText(:wkt), 4326)
-                   )
-                   {filter_sql}
-                   LIMIT :limit OFFSET :offset
-               """)
-           else:
-               query = text(f"""
-                   SELECT t.*,
-                          ST_AsGeoJSON(t.geom) AS geom_geojson
-                   FROM {SCHEMA}.{table} t
-                   WHERE ST_Intersects(
-                       t.geom,
-                       ST_SetSRID(ST_GeomFromText(:wkt), 4326)
-                   )
-                   {filter_sql}
-                   LIMIT :limit OFFSET :offset
-               """)
-           res = conn.execute(query, {"wkt": wkt, "limit": limit, "offset": offset, **filter_params,})
-           results_by_dataset[table] = [dict(row._mapping) for row in res]
-   return results_by_dataset
+    wkt = polygon.wkt
+    results_by_dataset: Dict[str, Dict] = {}
 
+    with engine.connect() as conn:
+
+        for table in dataset:
+
+            # ---------------------------------------------------------
+            # 1. Validate filters against this table
+            # ---------------------------------------------------------
+            validated_filters = validate_filters_for_table(
+                table,
+                filters
+            )
+
+            # ---------------------------------------------------------
+            # 2. Full filters
+            #
+            # Used for:
+            #   - total
+            #   - data
+            #
+            # Includes state filter if provided.
+            # ---------------------------------------------------------
+            filter_sql, filter_params = build_filter_clause(
+                validated_filters
+            )
+
+            # ---------------------------------------------------------
+            # 3. Aggregation filters
+            #
+            # Used for state aggregation.
+            #
+            # IMPORTANT:
+            # Exclude state itself so aggregation shows the
+            # distribution across all states intersecting the polygon.
+            # ---------------------------------------------------------
+            aggregation_filters = {
+                column: values
+                for column, values in validated_filters.items()
+                if column != "state"
+            }
+
+            aggregation_filter_sql, aggregation_filter_params = (
+                build_filter_clause(
+                    aggregation_filters
+                )
+            )
+
+            # ---------------------------------------------------------
+            # 4. Selected filters
+            #
+            # Tell frontend which state(s) user explicitly selected.
+            # ---------------------------------------------------------
+            selected_filters = {}
+
+            if "state" in validated_filters:
+                selected_filters["state"] = validated_filters["state"]
+
+            # ---------------------------------------------------------
+            # 5. Spatial condition
+            #
+            # This condition is applied to total, aggregation and data.
+            # ---------------------------------------------------------
+            spatial_sql = """
+                ST_Intersects(
+                    t.geom,
+                    ST_SetSRID(
+                        ST_GeomFromText(:wkt),
+                        4326
+                    )
+                )
+            """
+
+            # ---------------------------------------------------------
+            # 6. TOTAL
+            #
+            # Uses:
+            #   polygon + ALL filters
+            #
+            # Example:
+            #   polygon intersects 6205 records
+            #   => total = 6205
+            # ---------------------------------------------------------
+            count_query = text(f"""
+                SELECT COUNT(*)
+                FROM {SCHEMA}.{table} t
+                WHERE {spatial_sql}
+                {filter_sql}
+            """)
+
+            total = conn.execute(
+                count_query,
+                {
+                    "wkt": wkt,
+                    **filter_params
+                }
+            ).scalar() or 0
+
+            # ---------------------------------------------------------
+            # 7. STATE AGGREGATION
+            #
+            # Uses:
+            #   polygon + ALL filters EXCEPT state
+            #
+            # So for the current polygon:
+            #
+            #   Maharashtra  -> 2630
+            #   Uttarakhand  -> 2342
+            #   Rajasthan     -> 1233
+            #
+            # total          -> 6205
+            # ---------------------------------------------------------
+            aggregation = {}
+
+            if "state" in validated_filters or table == "cpmp_v2":
+
+                aggregation_query = text(f"""
+                    WITH state_counts AS (
+                        SELECT
+                            t."state",
+                            COUNT(*) AS count
+                        FROM {SCHEMA}.{table} t
+                        WHERE {spatial_sql}
+                        {aggregation_filter_sql}
+                        GROUP BY t."state"
+                    ),
+                    state_geometries AS (
+                        SELECT DISTINCT ON (t."state")
+                            t."state",
+                            ST_AsGeoJSON(t.geom) AS geom_geojson
+                        FROM {SCHEMA}.{table} t
+                        WHERE {spatial_sql}
+                          AND t."state" IS NOT NULL
+                        ORDER BY t."state"
+                    )
+                    SELECT
+                        sc."state",
+                        sc.count,
+                        sg.geom_geojson
+                    FROM state_counts sc
+                    LEFT JOIN state_geometries sg
+                      ON sg."state" = sc."state"
+                    ORDER BY sc.count DESC
+                """)
+
+                aggregation_rows = conn.execute(
+                    aggregation_query,
+                    {
+                        "wkt": wkt,
+                        **aggregation_filter_params
+                    }
+                )
+
+                aggregation["state"] = [
+                    {
+                        "value": row[0],
+                        "count": row[1],
+                        "geom": json.loads(row[2]) if row[2] else None,
+                    }
+                    for row in aggregation_rows
+                    if row[0] is not None
+                ]
+
+            # ---------------------------------------------------------
+            # 8. DATA
+            #
+            # Uses:
+            #   polygon + ALL filters
+            #
+            # Pagination applies ONLY here.
+            # ---------------------------------------------------------
+            if table == "gbif":
+
+                query = text(f"""
+                    SELECT
+                        t.*,
+                        ST_X(t.geom) AS longitude,
+                        ST_Y(t.geom) AS latitude
+                    FROM {SCHEMA}.{table} t
+                    WHERE {spatial_sql}
+                    {filter_sql}
+                    LIMIT :limit
+                    OFFSET :offset
+                """)
+
+            else:
+
+                query = text(f"""
+                    SELECT
+                        t.*,
+                        ST_AsGeoJSON(t.geom) AS geom_geojson
+                    FROM {SCHEMA}.{table} t
+                    WHERE {spatial_sql}
+                    {filter_sql}
+                    LIMIT :limit
+                    OFFSET :offset
+                """)
+
+            res = conn.execute(
+                query,
+                {
+                    "wkt": wkt,
+                    "limit": limit,
+                    "offset": offset,
+                    **filter_params
+                }
+            )
+
+            rows = [
+                dict(row._mapping)
+                for row in res
+            ]
+
+            # ---------------------------------------------------------
+            # 9. FINAL RESULT
+            # ---------------------------------------------------------
+            results_by_dataset[table] = {
+                "total": total,
+                "aggregation": aggregation,
+                "selected_filters": selected_filters,
+                "data": rows
+            }
+
+    return results_by_dataset
 
 # Returns all data from datasets (no geometry filter). Used when no polygon is provided.
-def get_all_data_from_datasets(dataset: List[str], limit: int = 1000, offset: int = 0, filters=None) -> Dict[str, List[Dict]]:
-  
-   results_by_dataset: Dict[str, List[Dict]] = {}
-   with engine.connect() as conn:
-       for table in dataset:
-           validated_filters = validate_filters_for_table(
-               table,
-               filters
-               )
-           filter_sql, filter_params = build_filter_clause(
-               validated_filters
-               )
-          
-           if table == "gbif":
-               query = text(f"""
-                   SELECT t.*,
-                          ST_X(t.geom) AS longitude,
-                          ST_Y(t.geom) AS latitude
-                   FROM {SCHEMA}.{table} t
-                   WHERE 1=1
-                   {filter_sql}
-                   LIMIT :limit OFFSET :offset
-               """)
-           else:
-               query = text(f"""
-                   SELECT t.*,
-                          ST_AsGeoJSON(t.geom) AS geom_geojson
-                   FROM {SCHEMA}.{table} t
-                   WHERE 1=1
-                   {filter_sql}
-                   LIMIT :limit OFFSET :offset
-               """)
-           res = conn.execute(query, {"limit": limit, "offset": offset, **filter_params,})
-           results_by_dataset[table] = [dict(row._mapping) for row in res]
-   return results_by_dataset
+def get_all_data_from_datasets(
+    dataset: List[str],
+    limit: int = 1000,
+    offset: int = 0,
+    filters=None
+) -> Dict[str, Dict]:
 
+    results_by_dataset: Dict[str, Dict] = {}
+
+    with engine.connect() as conn:
+
+        for table in dataset:
+
+            # ---------------------------------------------------------
+            # 1. Validate filters against this table
+            # ---------------------------------------------------------
+            validated_filters = validate_filters_for_table(
+                table,
+                filters
+            )
+
+            # ---------------------------------------------------------
+            # 2. Full filters
+            #
+            # Used for:
+            #   - total
+            #   - data
+            #
+            # Includes state filter if provided.
+            # ---------------------------------------------------------
+            filter_sql, filter_params = build_filter_clause(
+                validated_filters
+            )
+
+            # ---------------------------------------------------------
+            # 3. Aggregation filters
+            #
+            # Used for state aggregation.
+            #
+            # IMPORTANT:
+            # Exclude state itself so aggregation always shows the
+            # distribution across ALL states.
+            # ---------------------------------------------------------
+            aggregation_filters = {
+                column: values
+                for column, values in validated_filters.items()
+                if column != "state"
+            }
+
+            aggregation_filter_sql, aggregation_filter_params = (
+                build_filter_clause(
+                    aggregation_filters
+                )
+            )
+
+            # ---------------------------------------------------------
+            # 4. Selected filters
+            #
+            # Tell frontend which state(s) user explicitly selected.
+            # ---------------------------------------------------------
+            selected_filters = {}
+
+            if "state" in validated_filters:
+                selected_filters["state"] = validated_filters["state"]
+
+            # ---------------------------------------------------------
+            # 5. TOTAL
+            #
+            # Uses ALL filters, including state.
+            # ---------------------------------------------------------
+            count_query = text(f"""
+                SELECT COUNT(*)
+                FROM {SCHEMA}.{table} t
+                WHERE 1=1
+                {filter_sql}
+            """)
+
+            total = conn.execute(
+                count_query,
+                filter_params
+            ).scalar() or 0
+
+            # ---------------------------------------------------------
+            # 6. STATE AGGREGATION
+            #
+            # Uses ALL filters EXCEPT state.
+            # ---------------------------------------------------------
+            aggregation = {}
+
+            if "state" in validated_filters or table == "cpmp_v2":
+
+                aggregation_query = text(f"""
+                                         WITH state_counts AS (
+                                         SELECT
+                                         t."state",
+                                         COUNT(*) AS count
+                                         FROM {SCHEMA}.{table} t
+                                         WHERE 1=1
+                                         {aggregation_filter_sql}
+                                         GROUP BY t."state"
+                                         ),
+                                         state_geometries AS (
+                                         SELECT DISTINCT ON (t."state")
+                                         t."state",
+                                         ST_AsGeoJSON(t.geom) AS geom_geojson
+                                         FROM {SCHEMA}.{table} t
+                                         WHERE t."state" IS NOT NULL
+                                         ORDER BY t."state"
+                                         )
+                                         SELECT
+                                         sc."state",
+                                         sc.count,
+                                         sg.geom_geojson
+                                         FROM state_counts sc
+                                         LEFT JOIN state_geometries sg
+                                         ON sg."state" = sc."state"
+                                         ORDER BY sc.count DESC
+                                         """)
+
+                aggregation_rows = conn.execute(
+                    aggregation_query,
+                    aggregation_filter_params
+                )
+
+                aggregation["state"] = [
+                    {
+                        "value": row[0],
+                        "count": row[1],
+                        "geom": json.loads(row[2]) if row[2] else None,
+                        }
+                        for row in aggregation_rows
+                        if row[0] is not None
+                        ]
+
+            # ---------------------------------------------------------
+            # 7. DATA
+            #
+            # Uses ALL filters, including state.
+            # ---------------------------------------------------------
+            if table == "gbif":
+
+                query = text(f"""
+                    SELECT
+                        t.*,
+                        ST_X(t.geom) AS longitude,
+                        ST_Y(t.geom) AS latitude
+                    FROM {SCHEMA}.{table} t
+                    WHERE 1=1
+                    {filter_sql}
+                    LIMIT :limit
+                    OFFSET :offset
+                """)
+
+            else:
+
+                query = text(f"""
+                    SELECT
+                        t.*,
+                        ST_AsGeoJSON(t.geom) AS geom_geojson
+                    FROM {SCHEMA}.{table} t
+                    WHERE 1=1
+                    {filter_sql}
+                    LIMIT :limit
+                    OFFSET :offset
+                """)
+
+            res = conn.execute(
+                query,
+                {
+                    "limit": limit,
+                    "offset": offset,
+                    **filter_params
+                }
+            )
+
+            rows = [
+                dict(row._mapping)
+                for row in res
+            ]
+
+            # ---------------------------------------------------------
+            # 8. FINAL RESULT
+            # ---------------------------------------------------------
+            results_by_dataset[table] = {
+                "total": total,
+                "aggregation": aggregation,
+                "selected_filters": selected_filters,
+                "data": rows
+            }
+
+    return results_by_dataset
 
 # Accepts a scientific name and returns matching names with longitude and latitude from both datasets
 

@@ -339,21 +339,25 @@ def transform_results_with_display_fields(
    raw_display_fields_by_dataset: Any = None,
 ) -> dict:
    """
-   Transform results to include display_fields for each dataset.
-
+   Transform results to include display_fields, total and data for each dataset.
+   The input for each dataset is expected to contain:
+   - total: total number of matching records
+   - data: paginated dataset records
+   
    If fields_map provides a non-empty list for a dataset,
    that list is returned as display_fields and data is projected
    to only those fields plus geometry fields.
-
+   
    If displayFieldsByDataset is sent as {} (empty object),
    or a dataset is sent with null/[],
    display_fields is null and data is returned unfiltered.
-
+   
    When displayFieldsByDataset is omitted (None),
    display_fields are derived from the DB schema merged with
    keys present in returned rows.
+   
    """
-
+   
    transformed_results = {}
    requested = fields_map or {}
 
@@ -372,15 +376,24 @@ def transform_results_with_display_fields(
 
    for frontend_name in frontend_datasets:
 
-       data = results_by_frontend.get(frontend_name, [])
+       result = results_by_frontend.get(frontend_name)
 
-       if (
-           (isinstance(data, list) and len(data) == 0)
-           or
-           (isinstance(data, dict) and len(data) == 0)
-       ):
+       # Dataset not returned / not found
+       if result is None:
            transformed_results[frontend_name] = None
            continue
+
+       # New DAO structure
+       if isinstance(result, dict) and "data" in result:
+            total = result.get("total", 0)
+            aggregation = result.get("aggregation", {})
+            data = result.get("data", [])
+            selected_filters = result.get("selected_filters", {})
+       else:
+            total = None
+            aggregation = {}
+            selected_filters = {}
+            data = result
 
        if (
            global_empty_object
@@ -391,9 +404,12 @@ def transform_results_with_display_fields(
            )
        ):
            transformed_results[frontend_name] = {
-               "display_fields": None,
-               "data": data,
-           }
+                "display_fields": None,
+                "total": total,
+                "aggregation": aggregation,
+                "selected_filters": selected_filters,
+                "data": data,
+            }
            continue
 
        client_fields = requested.get(frontend_name)
@@ -441,12 +457,14 @@ def transform_results_with_display_fields(
                )
 
        transformed_results[frontend_name] = {
-           "display_fields": display_fields,
-           "data": data,
-       }
+            "display_fields": display_fields,
+            "total": total,
+            "aggregation": aggregation,
+            "selected_filters": selected_filters,
+            "data": data,
+        }
 
    return transformed_results
-
 
 def fetch_multi_polygon_query_with_display_fields(
    dataset: List[str],
